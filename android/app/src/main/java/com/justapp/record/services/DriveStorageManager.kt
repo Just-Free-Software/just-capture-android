@@ -23,6 +23,7 @@ class DriveStorageManager(
     companion object {
         const val LOW_STORAGE_THRESHOLD_BYTES = 250L * 1024 * 1024
         const val QUOTA_REFRESH_INTERVAL_MS = 60_000L
+        private const val TAG = "DriveStorageManager"
     }
 
     val quota = MutableStateFlow<DriveStorageQuota?>(null)
@@ -88,8 +89,4 @@ class DriveStorageManager(
     }
 
     fun formatAvailableBytes(): String? = availableBytes()?.let { Formatters.formatBytes(context, it) }
-
-    private companion object {
-        const val TAG = "DriveStorageManager"
-    }
 }

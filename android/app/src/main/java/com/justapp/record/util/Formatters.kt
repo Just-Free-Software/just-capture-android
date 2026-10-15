@@ -1,7 +1,7 @@
 package com.justapp.record.util
 
 import android.content.Context
-import android.text.Formatter
+import android.text.format.Formatter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
