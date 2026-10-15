@@ -1,0 +1,26 @@
+# Gradle
+.gradle/
+build/
+
+# Android
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# IntelliJ / Android Studio
+*.iml
+.idea/
+.kotlin/
+
+# Kotlin
+kotlin-js-store/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Linux
+*~
