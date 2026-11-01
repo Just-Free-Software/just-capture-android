@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Just"
+rootProject.name = "JustCapture"
 include(":app")

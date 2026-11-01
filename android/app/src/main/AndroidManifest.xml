@@ -12,12 +12,12 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
-        android:name=".JustApplication"
+        android:name=".JustCaptureApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Just">
+        android:theme="@style/Theme.JustCapture">
 
         <activity
             android:name=".MainActivity"
@@ -34,7 +34,7 @@
         <activity
             android:name=".auth.AuthRedirectActivity"
             android:exported="true"
-            android:theme="@style/Theme.Just.Translucent">
+            android:theme="@style/Theme.JustCapture.Translucent">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

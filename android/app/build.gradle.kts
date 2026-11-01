@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.justapp.record"
+    namespace = "fyi.justfreesoftware.justcapture"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.justapp.record"
+        applicationId = "fyi.justfreesoftware.justcapture"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
