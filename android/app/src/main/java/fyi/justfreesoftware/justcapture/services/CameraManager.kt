@@ -58,6 +58,19 @@ class CameraManager(
         private set
     var isUsingFrontCamera by mutableStateOf(false)
 
+    /**
+     * True between a stop request and the final chunk being written. A new
+     * recording can't start until this clears.
+     */
+    var isFinishing by mutableStateOf(false)
+        private set
+
+    /**
+     * Set when recording had to stop on its own (e.g. the camera failed or
+     * the phone ran out of space). Cleared on the next start.
+     */
+    var recordingError by mutableStateOf<String?>(null)
+
     var onChunkCompleted: ((VideoChunk) -> Unit)? = null
 
     private var lifecycleOwner: LifecycleOwner? = null
@@ -121,7 +134,7 @@ class CameraManager(
     }
 
     fun startRecording(chunkDurationSec: Double, outputDirectory: File) {
-        if (isRecording) return
+        if (isRecording || isFinishing) return
         if (!bound) {
             Log.w(TAG, "Camera not ready; cannot record")
             return
@@ -130,6 +143,7 @@ class CameraManager(
         this.outputDirectory = outputDirectory
         currentChunkIndex = 0
         elapsedTimeSec = 0.0
+        recordingError = null
         isRecording = true
         recordingStartMs = System.currentTimeMillis()
 
@@ -199,6 +213,7 @@ class CameraManager(
         tickerJob = null
         chunkTimerJob?.cancel()
         chunkTimerJob = null
+        isFinishing = activeRecording != null
         stopActiveRecording()
     }
 
@@ -246,9 +261,18 @@ class CameraManager(
                 Log.w(TAG, "Chunk $index produced no data; skipping")
             }
 
+            if (event.hasError() && event.error != VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED &&
+                fileSize == 0L && isRecording
+            ) {
+                recordingError = "The camera stopped recording unexpectedly."
+                stopRecording()
+            }
             if (isRecording) {
                 currentChunkIndex = index + 1
                 startNextChunkSegment()
+            } else {
+                activeRecording = null
+                isFinishing = false
             }
         }
     }

@@ -4,22 +4,36 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MarkEmailUnread
+import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SlowMotionVideo
+import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,15 +45,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
-import fyi.justfreesoftware.justcapture.ui.screens.DashboardScreen
+import fyi.justfreesoftware.justcapture.ui.screens.MyClipsScreen
 import fyi.justfreesoftware.justcapture.ui.screens.RecordingScreen
 import fyi.justfreesoftware.justcapture.ui.screens.SettingsScreen
+import fyi.justfreesoftware.justcapture.ui.screens.WatchScreen
+import fyi.justfreesoftware.justcapture.ui.theme.AppColors
 
 @Composable
 fun JustCaptureApp(graph: AppGraph) {
@@ -51,32 +71,38 @@ fun JustCaptureApp(graph: AppGraph) {
     }
 }
 
+private data class Tab(val label: String, val icon: ImageVector)
+
+private val tabs = listOf(
+    Tab("Record", Icons.Filled.Videocam),
+    Tab("My Clips", Icons.Filled.VideoLibrary),
+    Tab("Watch", Icons.Filled.SlowMotionVideo),
+    Tab("Settings", Icons.Filled.Settings)
+)
+
 @Composable
 private fun MainTabs(graph: AppGraph) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
 
     Scaffold(
-        containerColor = Color.Black,
+        containerColor = AppColors.background,
         bottomBar = {
-            NavigationBar(containerColor = Color(0xFF0F0F0F)) {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Filled.Videocam, contentDescription = "Record") },
-                    label = { Text("Record") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Filled.Dashboard, contentDescription = "Dashboard") },
-                    label = { Text("Dashboard") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Filled.Settings, contentDescription = "Settings") },
-                    label = { Text("Settings") }
-                )
+            NavigationBar(containerColor = Color(0xFF0E0E13)) {
+                tabs.forEachIndexed { index, tab ->
+                    NavigationBarItem(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        icon = { Icon(tab.icon, contentDescription = null) },
+                        label = { Text(tab.label) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = AppColors.accent,
+                            selectedTextColor = AppColors.accent,
+                            indicatorColor = AppColors.accent.copy(alpha = 0.15f),
+                            unselectedIconColor = AppColors.secondaryText,
+                            unselectedTextColor = AppColors.secondaryText
+                        )
+                    )
+                }
             }
         }
     ) { innerPadding ->
@@ -87,8 +113,9 @@ private fun MainTabs(graph: AppGraph) {
         ) {
             when (selectedTab) {
                 0 -> RecordingScreen(graph)
-                1 -> DashboardScreen(graph)
-                2 -> SettingsScreen(graph)
+                1 -> MyClipsScreen(graph)
+                2 -> WatchScreen(graph)
+                3 -> SettingsScreen(graph)
             }
         }
     }
@@ -97,88 +124,122 @@ private fun MainTabs(graph: AppGraph) {
 @Composable
 private fun SignInScreen(graph: AppGraph) {
     val isAuthenticating by graph.authManager.isAuthenticating.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val signInError by graph.authManager.signInError.collectAsState()
+    val context = LocalContext.current
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .padding(horizontal = 32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(AppColors.background)
     ) {
+        // Soft brand glow behind the logo.
         Box(
             modifier = Modifier
-                .size(80.dp)
-                .background(
-                    brush = Brush.linearGradient(listOf(Color(0xFF2196F3), Color(0xFF9C27B0))),
-                    shape = RoundedCornerShape(16.dp)
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Videocam,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(44.dp)
-            )
-        }
-
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            text = "Just",
-            color = Color.White,
-            fontSize = 48.sp,
-            fontWeight = FontWeight.Bold
+                .align(Alignment.TopCenter)
+                .offset(y = (-40).dp)
+                .size(360.dp)
+                .blur(120.dp)
+                .alpha(0.35f)
+                .background(AppColors.brandGradient, CircleShape)
         )
 
-        Text(
-            text = "Continuous Video Recording & Upload",
-            color = Color.Gray,
-            style = MaterialTheme.typography.bodySmall
-        )
-
-        Spacer(Modifier.height(48.dp))
-
-        TextButton(
-            onClick = { graph.authManager.signIn(context) },
-            enabled = !isAuthenticating,
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .background(Color(0xFF2196F3), RoundedCornerShape(12.dp))
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (isAuthenticating) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(22.dp),
-                    color = Color.White,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text(
-                    "G",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp
-                )
-                Spacer(Modifier.size(8.dp))
-                Text(
-                    "Sign in with Google",
-                    color = Color.White,
-                    style = MaterialTheme.typography.titleMedium
+            Spacer(Modifier.weight(1f))
+
+            Box(
+                modifier = Modifier
+                    .size(112.dp)
+                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(30.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Filled.RadioButtonChecked,
+                    contentDescription = null,
+                    tint = Color(0xFFFF5959),
+                    modifier = Modifier.size(64.dp)
                 )
             }
+            Spacer(Modifier.height(24.dp))
+
+            Text("Just Capture", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Record. Back up. Alert.",
+                color = AppColors.secondaryText,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            Column(
+                modifier = Modifier.padding(top = 40.dp, start = 12.dp, end = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                Feature(Icons.Filled.CloudUpload, "Every clip goes to your Google Drive the moment it's recorded.")
+                Feature(Icons.Filled.MarkEmailUnread, "The people you choose get an email with a link to watch.")
+                Feature(Icons.Filled.Lock, "Footage lives in your own Drive. Nothing is stored anywhere else.")
+            }
+
+            Spacer(Modifier.weight(1f))
+
+            Button(
+                onClick = { graph.authManager.signIn(context) },
+                enabled = !isAuthenticating,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color.White,
+                    contentColor = Color.Black,
+                    disabledContainerColor = Color.White.copy(alpha = 0.7f),
+                    disabledContentColor = Color.Black
+                ),
+                shape = RoundedCornerShape(50),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(54.dp)
+            ) {
+                if (isAuthenticating) {
+                    CircularProgressIndicator(color = Color.Black, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                } else {
+                    Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    if (isAuthenticating) "Signing in…" else "Continue with Google",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            Text(
+                "Just Capture asks for permission to save to Drive and send email from your Gmail account.",
+                color = AppColors.tertiaryText,
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 14.dp, bottom = 24.dp, start = 16.dp, end = 16.dp)
+            )
         }
+    }
 
-        Spacer(Modifier.height(24.dp))
-
-        Text(
-            text = "Sign in to enable automatic Google Drive uploads and emergency email alerts",
-            color = Color.Gray,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+    signInError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { graph.authManager.signInError.value = null },
+            title = { Text("Couldn't Sign In") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { graph.authManager.signInError.value = null }) { Text("OK") }
+            }
         )
+    }
+}
+
+@Composable
+private fun Feature(icon: ImageVector, text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(26.dp))
+        Text(text, color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
     }
 }

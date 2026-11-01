@@ -1,81 +1,214 @@
 package fyi.justfreesoftware.justcapture.services
 
 import android.util.Log
+import fyi.justfreesoftware.justcapture.config.AppConfig
 import fyi.justfreesoftware.justcapture.data.SessionStore
-import fyi.justfreesoftware.justcapture.data.Settings
 import fyi.justfreesoftware.justcapture.model.RecordingSession
 import fyi.justfreesoftware.justcapture.model.UploadStatus
 import fyi.justfreesoftware.justcapture.model.VideoChunk
 import fyi.justfreesoftware.justcapture.util.RetryPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.ceil
 
 /**
- * Upload queue for video chunks, mirroring the iOS app's UploadQueueManager.
- * Each chunk uploads with exponential-backoff retries; a Drive quota
- * exhaustion parks the chunk and polls the (cheap) quota endpoint with growing
- * backoff until space is freed, then retries.
+ * Upload queue for video chunks. Each chunk uploads with exponential-backoff
+ * retries; a Drive quota exhaustion parks the chunk and polls the (cheap)
+ * quota endpoint with growing backoff until space is freed, then retries.
+ *
+ * All bookkeeping maps are touched only from [scope], which runs on the main
+ * thread, so they need no locking.
  */
 class UploadQueueManager(
     private val sessionStore: SessionStore,
-    private val settings: Settings,
     private val authManager: GoogleAuthManager,
     private val scope: CoroutineScope
 ) {
-    /** True when a Drive upload failed on storage quota exhaustion. */
+    /**
+     * Set when a Drive upload fails because the account's storage quota is
+     * exhausted. Observed by the UI to alert the user.
+     */
     val storageExceeded = MutableStateFlow(false)
+
+    private val _publicSharingBlocked = MutableStateFlow(false)
+
+    /**
+     * Set when the signed-in account can't share folders publicly (usually a
+     * Workspace admin policy), so alert-email links won't open for
+     * recipients. Observed by the UI to warn the user ahead of time.
+     */
+    val publicSharingBlocked: StateFlow<Boolean> = _publicSharingBlocked.asStateFlow()
+
+    /** Called once a session's Drive folder exists, so alerts sent without a link can send it. */
+    var onFolderCreated: ((sessionId: String) -> Unit)? = null
+
+    /** Called after each chunk lands in Drive, so the storage figure updates right away. */
+    var onChunkUploaded: ((VideoChunk) -> Unit)? = null
 
     private val uploadTasks = mutableMapOf<String, Job>()
 
-    fun enqueue(sessionId: String, chunkId: String) {
-        val session = sessionStore.sessions.value.firstOrNull { it.id == sessionId } ?: return
-        val chunk = session.chunks.firstOrNull { it.id == chunkId } ?: return
+    /**
+     * One in-flight Drive folder creation per session. Without this, the
+     * recording start and the first chunk uploads each create their own
+     * folder and the session's clips end up split across several folders.
+     */
+    private val folderTasks = mutableMapOf<String, Deferred<String>>()
 
-        uploadTasks.remove(chunkId)?.cancel()
-        uploadTasks[chunkId] = scope.launch {
-            sessionStore.updateChunk(sessionId, chunkId) {
-                it.copy(status = UploadStatus.UPLOADING, uploadProgress = 0.0)
+    /** One in-flight sharing request per session. */
+    private val shareTasks = mutableMapOf<String, Deferred<Unit>>()
+
+    /** Serializes each session's playlist writes so only one playlist file is ever created. */
+    private val playlistLocks = mutableMapOf<String, Mutex>()
+
+    /**
+     * Caps simultaneous file uploads. After an outage dozens of chunks may be
+     * queued; pushing them all at once on a weak connection makes every one
+     * of them slower to land.
+     */
+    private val uploadSlots = Semaphore(AppConfig.MAX_CONCURRENT_UPLOADS)
+
+    /**
+     * Returns the session's Drive folder id, creating the folder if needed.
+     * Concurrent callers share a single creation request.
+     */
+    suspend fun ensureFolder(sessionId: String): String {
+        val session = sessionStore.session(sessionId) ?: throw IllegalStateException("Session $sessionId is gone")
+        session.driveFolderId?.let { id ->
+            if (session.driveFolderShared == false) shareFolder(sessionId)
+            return id
+        }
+        // A finished task (failed, or done before the session saw its id) is
+        // replaced rather than reused.
+        val task = folderTasks[sessionId]?.takeIf { it.isActive } ?: scope.async {
+            val token = authManager.validAccessToken()
+            val (folderId, link) = GoogleDriveService.createFolder(session.folderName, token)
+            sessionStore.update(sessionId) { it.copy(driveFolderId = folderId, driveFolderLink = link) }
+            shareFolder(sessionId)
+            // After sharing, so a follow-up link works when it's opened.
+            onFolderCreated?.invoke(sessionId)
+            folderId
+        }.also { folderTasks[sessionId] = it }
+        return task.await()
+    }
+
+    /**
+     * Shares the session's folder with anyone who has the link. Best-effort:
+     * a failure (outage, or a Workspace policy that forbids public links)
+     * must never block uploads, so it's logged and retried on the next
+     * [ensureFolder] call instead of thrown.
+     */
+    private suspend fun shareFolder(sessionId: String) {
+        val task = shareTasks[sessionId]?.takeIf { it.isActive } ?: scope.async {
+            try {
+                val folderId = sessionStore.session(sessionId)?.driveFolderId ?: return@async
+                val token = authManager.validAccessToken()
+                GoogleDriveService.shareWithAnyoneWithLink(folderId, token)
+                sessionStore.update(sessionId) { it.copy(driveFolderShared = true) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: DriveException.PublicSharingNotAllowed) {
+                // Retrying can't succeed; stop and leave the folder private.
+                _publicSharingBlocked.value = true
+                sessionStore.update(sessionId) { it.copy(driveFolderShared = null) }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to share Drive folder: ${e.message}")
             }
+        }.also { shareTasks[sessionId] = it }
+        task.await()
+    }
 
+    /**
+     * Finds out at sign-in whether this account may share publicly, so the
+     * user is warned before an emergency rather than during one. Drive has no
+     * way to ask, so this shares a throwaway folder and deletes it. A network
+     * failure leaves the previous answer in place.
+     */
+    suspend fun checkPublicSharing() {
+        try {
+            val token = authManager.validAccessToken()
+            val (probeId, _) = GoogleDriveService.createFolder("Just Capture sharing check", token)
+            try {
+                GoogleDriveService.shareWithAnyoneWithLink(probeId, token)
+                _publicSharingBlocked.value = false
+            } catch (e: DriveException.PublicSharingNotAllowed) {
+                _publicSharingBlocked.value = true
+            } finally {
+                withContext(NonCancellable) {
+                    runCatching { GoogleDriveService.deleteFile(probeId, token) }
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Public sharing check failed: ${e.message}")
+        }
+    }
+
+    /** Clears per-account state when the user signs out. */
+    fun resetAccountState() {
+        _publicSharingBlocked.value = false
+    }
+
+    /**
+     * Creates the session's Drive folder right away (so the alert email can
+     * carry the link), retrying with backoff. Failures are non-fatal — the
+     * first chunk upload will try again.
+     */
+    fun prepareFolder(sessionId: String) {
+        scope.launch {
+            var attempt = 0
+            while (sessionStore.session(sessionId)?.let { it.driveFolderId == null } == true) {
+                try {
+                    ensureFolder(sessionId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    attempt += 1
+                    if (attempt >= RetryPolicy.MAX_ATTEMPTS) {
+                        Log.e(TAG, "Failed to create Drive folder after $attempt attempts: ${e.message}")
+                        return@launch
+                    }
+                    val delaySec = RetryPolicy.delayForAttempt(attempt)
+                    Log.w(TAG, "Drive folder attempt $attempt failed, retrying in ${delaySec.toInt()}s: ${e.message}")
+                    delay((delaySec * 1000).toLong())
+                }
+            }
+        }
+    }
+
+    fun enqueue(sessionId: String, chunkId: String) {
+        uploadTasks.remove(chunkId)?.cancel()
+        sessionStore.updateChunkInMemory(sessionId, chunkId) {
+            it.copy(status = UploadStatus.PENDING, uploadProgress = 0.0)
+        }
+        uploadTasks[chunkId] = scope.launch {
             var attempt = 0
             var quotaAttempt = 0
             while (true) {
+                val chunk = sessionStore.session(sessionId)?.chunks?.firstOrNull { it.id == chunkId } ?: return@launch
                 try {
-                    val token = authManager.validAccessToken()
-
-                    var currentSession = sessionStore.sessions.value.firstOrNull { it.id == sessionId }
-                        ?: throw RuntimeException("Session $sessionId disappeared")
-
-                    if (currentSession.driveFolderId == null) {
-                        val result = GoogleDriveService.createFolder(
-                            name = currentSession.folderName,
-                            accessToken = token
-                        )
-                        sessionStore.update(sessionId) {
-                            it.copy(driveFolderId = result.first, driveFolderLink = result.second)
-                        }
-                        currentSession = sessionStore.sessions.value.firstOrNull { it.id == sessionId }
-                            ?: throw RuntimeException("Session $sessionId disappeared")
-                    }
-
-                    val folderId = currentSession.driveFolderId
-                        ?: throw RuntimeException("Session has no Drive folder")
-
-                    val fileId = GoogleDriveService.uploadFile(
-                        file = File(chunk.localPath),
-                        fileName = chunk.fileName,
-                        folderId = folderId,
-                        accessToken = token
-                    ) { progress ->
-                        scope.launch {
-                            sessionStore.updateChunk(sessionId, chunkId) {
-                                it.copy(uploadProgress = progress)
+                    val fileId = uploadSlots.withPermit {
+                        sessionStore.updateChunkInMemory(sessionId, chunkId) { it.copy(status = UploadStatus.UPLOADING) }
+                        val folderId = ensureFolder(sessionId)
+                        val token = authManager.validAccessToken()
+                        GoogleDriveService.uploadFile(File(chunk.localPath), chunk.fileName, folderId, token) { progress ->
+                            scope.launch {
+                                sessionStore.updateChunkInMemory(sessionId, chunkId) { it.copy(uploadProgress = progress) }
                             }
                         }
                     }
@@ -84,16 +217,13 @@ class UploadQueueManager(
                         it.copy(status = UploadStatus.UPLOADED, driveFileId = fileId, uploadProgress = 1.0)
                     }
                     storageExceeded.value = false
-
-                    if (!settings.saveChunksLocally) {
-                        File(chunk.localPath).delete()
-                    }
-
+                    onChunkUploaded?.invoke(chunk)
+                    uploadTasks.remove(chunkId)
                     updatePlaylist(sessionId)
                     return@launch
                 } catch (e: CancellationException) {
                     throw e
-                } catch (e: DriveStorageQuotaExceededException) {
+                } catch (e: DriveException.StorageQuotaExceeded) {
                     // Recording keeps going; the chunk stays queued. Freeing
                     // space usually needs the user to act, so back off
                     // exponentially, and between attempts just poll the
@@ -105,33 +235,21 @@ class UploadQueueManager(
                     storageExceeded.value = true
                     quotaAttempt += 1
                     val delaySec = storageRetryDelay(quotaAttempt)
-                    Log.w(
-                        TAG,
-                        "Chunk ${chunk.index + 1} can't upload: Google Drive storage is full. " +
-                            "Re-checking in ${delaySec.toInt() / 60} min."
-                    )
-                    var spaceFreed = false
+                    Log.w(TAG, "Chunk ${chunk.index + 1} can't upload: Drive is full. Re-checking in ${delaySec.toInt() / 60} min.")
                     while (true) {
                         delay((delaySec * 1000).toLong())
                         try {
-                            val token = authManager.validAccessToken()
-                            val quota = GoogleDriveService.getStorageQuota(token)
+                            val quota = GoogleDriveService.getStorageQuota(authManager.validAccessToken())
                             // null availableBytes = unlimited quota, always uploadable
-                            if ((quota.availableBytes ?: Long.MAX_VALUE) > 0) {
-                                spaceFreed = true
-                                break
-                            }
+                            if ((quota.availableBytes ?: Long.MAX_VALUE) > 0) break
                         } catch (e2: CancellationException) {
                             throw e2
                         } catch (e2: Exception) {
-                            // Couldn't read the quota (e.g. offline) — fall
-                            // through and let the upload attempt itself
-                            // surface whatever the real error is.
+                            // Couldn't read the quota (e.g. offline) — let the
+                            // upload attempt itself surface the real error.
                             break
                         }
                     }
-                    if (!spaceFreed) continue
-                    // Space is back; fall through to retry the upload.
                 } catch (e: Exception) {
                     attempt += 1
                     if (attempt >= RetryPolicy.MAX_ATTEMPTS) {
@@ -139,96 +257,87 @@ class UploadQueueManager(
                             it.copy(status = UploadStatus.FAILED, uploadProgress = 0.0)
                         }
                         Log.e(TAG, "Chunk ${chunk.index + 1} failed after $attempt attempts: ${e.message}")
+                        uploadTasks.remove(chunkId)
                         return@launch
                     }
+                    sessionStore.updateChunkInMemory(sessionId, chunkId) {
+                        it.copy(status = UploadStatus.PENDING, uploadProgress = 0.0)
+                    }
                     val delaySec = RetryPolicy.delayForAttempt(attempt)
-                    Log.w(
-                        TAG,
-                        "Upload attempt $attempt for chunk ${chunk.index + 1} failed, " +
-                            "retrying in ${delaySec.toInt()}s: ${e.message}"
-                    )
+                    Log.w(TAG, "Upload attempt $attempt for chunk ${chunk.index + 1} failed, retrying in ${delaySec.toInt()}s: ${e.message}")
                     delay((delaySec * 1000).toLong())
                 }
             }
         }
     }
 
-    fun retryChunk(sessionId: String, chunkId: String) {
-        enqueue(sessionId, chunkId)
-    }
+    fun retryChunk(sessionId: String, chunkId: String) = enqueue(sessionId, chunkId)
 
-    /** Cancels every in-flight upload belonging to a session. */
+    /** Cancels every in-flight upload belonging to a session, e.g. before deleting it. */
     fun cancelUploads(sessionId: String) {
-        val session = sessionStore.sessions.value.firstOrNull { it.id == sessionId } ?: return
+        val session = sessionStore.session(sessionId) ?: return
         for (chunk in session.chunks) {
             uploadTasks.remove(chunk.id)?.cancel()
         }
     }
 
     /**
-     * On app launch, re-enqueue every chunk that wasn't confirmed uploaded so
-     * a backgrounding/kill mid-outage doesn't permanently strand uploads.
-     * Chunks whose local file is already gone are skipped; PENDING/UPLOADING
-     * chunks with no file are marked FAILED so the user sees the truth.
+     * Re-enqueues every chunk that wasn't confirmed uploaded, so a kill
+     * mid-outage doesn't strand uploads. PENDING/UPLOADING chunks whose file
+     * is gone are marked FAILED so the user sees the truth.
      */
     suspend fun resumePendingUploads() {
-        var changed = false
         for (session in sessionStore.sessions.value) {
             for (chunk in session.chunks) {
-                if (chunk.status != UploadStatus.UPLOADED) {
-                    if (File(chunk.localPath).exists()) {
-                        sessionStore.updateChunk(session.id, chunk.id) { it.copy(uploadProgress = 0.0) }
-                        enqueue(session.id, chunk.id)
-                    } else if (chunk.status == UploadStatus.PENDING || chunk.status == UploadStatus.UPLOADING) {
-                        sessionStore.updateChunk(session.id, chunk.id) { it.copy(status = UploadStatus.FAILED) }
-                        changed = true
-                    }
+                if (chunk.status == UploadStatus.UPLOADED || chunk.id in uploadTasks) continue
+                if (File(chunk.localPath).exists()) {
+                    enqueue(session.id, chunk.id)
+                } else if (chunk.status == UploadStatus.PENDING || chunk.status == UploadStatus.UPLOADING) {
+                    sessionStore.updateChunk(session.id, chunk.id) { it.copy(status = UploadStatus.FAILED) }
                 }
             }
         }
-        if (changed) sessionStore.save()
     }
 
+    /**
+     * Rewrites the session's playlist on Drive. Calls for the same session
+     * run one after another so only one playlist file is ever created.
+     */
     suspend fun updatePlaylist(sessionId: String) {
-        try {
-            val session = sessionStore.sessions.value.firstOrNull { it.id == sessionId } ?: return
-            val folderId = session.driveFolderId ?: return
-            val token = authManager.validAccessToken()
-
-            val content = generatePlaylistContent(session)
-            val fileId = GoogleDriveService.uploadOrUpdatePlaylist(
-                content = content,
-                folderId = folderId,
-                existingFileId = session.playlistFileId,
-                accessToken = token
-            )
-            sessionStore.update(sessionId) { it.copy(playlistFileId = fileId) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to update playlist: ${e.message}")
-        }
-    }
-
-    private fun generatePlaylistContent(session: RecordingSession): String {
-        val m3u8 = StringBuilder()
-        m3u8.append("#EXTM3U\n")
-        m3u8.append("#EXT-X-VERSION:3\n")
-        m3u8.append("#EXT-X-TARGETDURATION:${ceil(session.chunkDurationSec).toInt()}\n")
-        m3u8.append("#EXT-X-MEDIA-SEQUENCE:0")
-
-        for (chunk in session.chunks) {
-            if (chunk.status == UploadStatus.UPLOADED && chunk.driveFileId != null) {
-                m3u8.append("\n#EXTINF:${chunk.durationSec},\n")
-                m3u8.append(GoogleDriveService.getDirectDownloadUrl(chunk.driveFileId))
+        val lock = playlistLocks.getOrPut(sessionId) { Mutex() }
+        lock.withLock {
+            try {
+                val session = sessionStore.session(sessionId) ?: return
+                val folderId = session.driveFolderId ?: return
+                val token = authManager.validAccessToken()
+                val fileId = GoogleDriveService.uploadOrUpdatePlaylist(
+                    content = playlistContent(session),
+                    folderId = folderId,
+                    existingFileId = session.playlistFileId,
+                    accessToken = token
+                )
+                sessionStore.update(sessionId) { it.copy(playlistFileId = fileId) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to update playlist: ${e.message}")
             }
         }
+    }
 
-        if (!session.isActive) {
-            m3u8.append("\n#EXT-X-ENDLIST")
+    private fun playlistContent(session: RecordingSession): String = buildString {
+        append("#EXTM3U\n")
+        append("#EXT-X-VERSION:3\n")
+        append("#EXT-X-TARGETDURATION:${ceil(session.chunkDurationSec).toInt()}\n")
+        append("#EXT-X-MEDIA-SEQUENCE:0")
+        for (chunk in session.chunks) {
+            val fileId = chunk.driveFileId
+            if (chunk.status == UploadStatus.UPLOADED && fileId != null) {
+                append("\n#EXTINF:${chunk.durationSec},\n")
+                append(GoogleDriveService.getDirectDownloadUrl(fileId))
+            }
         }
-
-        return m3u8.toString()
+        if (!session.isActive) append("\n#EXT-X-ENDLIST")
     }
 
     companion object {

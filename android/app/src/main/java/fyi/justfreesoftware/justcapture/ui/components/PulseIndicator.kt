@@ -40,12 +40,12 @@ fun PulseIndicator(modifier: Modifier = Modifier) {
                     scaleY = scale
                     alpha = 1f - (scale - 1f)
                 }
-                .background(Color.Red, CircleShape)
+                .background(fyi.justfreesoftware.justcapture.ui.theme.AppColors.record, CircleShape)
         )
         Box(
             modifier = Modifier
                 .size(12.dp)
-                .background(Color.Red, CircleShape)
+                .background(fyi.justfreesoftware.justcapture.ui.theme.AppColors.record, CircleShape)
         )
     }
 }

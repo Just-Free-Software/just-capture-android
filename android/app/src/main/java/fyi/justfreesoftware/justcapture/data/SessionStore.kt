@@ -8,6 +8,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
@@ -45,9 +46,14 @@ class SessionStore(context: Context) {
         runBlocking { load() }
     }
 
+    /** Where a session's chunks live, whether or not it exists yet. */
+    fun directory(sessionId: String): File = File(filesDir, "recordings/$sessionId")
+
+    fun session(id: String): RecordingSession? = _sessions.value.firstOrNull { it.id == id }
+
     suspend fun add(session: RecordingSession) {
         withContext(storeContext) {
-            _sessions.value = listOf(session) + _sessions.value
+            _sessions.update { listOf(session) + it }
             persist()
         }
     }
@@ -60,7 +66,7 @@ class SessionStore(context: Context) {
 
     suspend fun update(sessionId: String, transform: (RecordingSession) -> RecordingSession) {
         withContext(storeContext) {
-            _sessions.value = _sessions.value.map { if (it.id == sessionId) transform(it) else it }
+            _sessions.update { list -> list.map { if (it.id == sessionId) transform(it) else it } }
             persist()
         }
     }
@@ -76,19 +82,33 @@ class SessionStore(context: Context) {
     }
 
     /**
+     * Updates a chunk without writing to disk, for frequent transient state
+     * like upload progress. The next persisted change saves it along with
+     * everything else.
+     */
+    fun updateChunkInMemory(sessionId: String, chunkId: String, transform: (VideoChunk) -> VideoChunk) {
+        _sessions.update { list ->
+            list.map { session ->
+                if (session.id != sessionId) session
+                else session.copy(chunks = session.chunks.map { if (it.id == chunkId) transform(it) else it })
+            }
+        }
+    }
+
+    /**
      * Marks the active session inactive (used when a recording stops). Returns
      * the session that was finalized, or null if there was no active session.
      */
     suspend fun finalizeActive(): RecordingSession? {
         var finalized: RecordingSession? = null
         withContext(storeContext) {
-            _sessions.value = _sessions.value.map { session ->
-                if (session.isActive) {
-                    val done = session.copy(isActive = false)
-                    finalized = done
-                    done
-                } else {
-                    session
+            _sessions.update { list ->
+                list.map { session ->
+                    if (session.isActive) {
+                        session.copy(isActive = false).also { finalized = it }
+                    } else {
+                        session
+                    }
                 }
             }
             if (finalized != null) persist()
@@ -104,9 +124,8 @@ class SessionStore(context: Context) {
      */
     suspend fun delete(sessionId: String) {
         withContext(storeContext) {
-            val recordingsDir = File(filesDir, "recordings/$sessionId")
-            recordingsDir.deleteRecursively()
-            _sessions.value = _sessions.value.filterNot { it.id == sessionId }
+            directory(sessionId).deleteRecursively()
+            _sessions.update { list -> list.filterNot { it.id == sessionId } }
             persist()
         }
     }
@@ -133,7 +152,10 @@ class SessionStore(context: Context) {
 
     private fun persist() {
         try {
-            storageFile.writeText(json.encodeToString(_sessions.value))
+            // Write-then-rename so a kill mid-write can't leave a torn file.
+            val tmp = File(storageFile.path + ".tmp")
+            tmp.writeText(json.encodeToString(_sessions.value))
+            tmp.renameTo(storageFile)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save sessions", e)
         }

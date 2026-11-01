@@ -40,6 +40,10 @@ class GoogleAuthManager(
     val isAuthenticating = MutableStateFlow(false)
     val userName = MutableStateFlow<String?>(null)
     val userEmail = MutableStateFlow<String?>(null)
+    val userPhotoUrl = MutableStateFlow<String?>(null)
+
+    /** Shown to the user when sign-in fails for a reason other than cancelling. */
+    val signInError = MutableStateFlow<String?>(null)
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -77,6 +81,7 @@ class GoogleAuthManager(
     fun signIn(context: Context) {
         if (isAuthenticating.value) return
         isAuthenticating.value = true
+        signInError.value = null
         scope.launch {
             try {
                 val verifier = randomUrlSafe(32)
@@ -112,8 +117,21 @@ class GoogleAuthManager(
                 context.startActivity(Intent(Intent.ACTION_VIEW, uri))
             } catch (e2: Exception) {
                 Log.e(TAG, "No browser available for sign-in", e2)
+                signInError.value = "No web browser is available to sign in with."
                 isAuthenticating.value = false
             }
+        }
+    }
+
+    /**
+     * Called when the app comes back to the foreground. If the browser tab
+     * was closed without completing sign-in, no redirect ever arrives, so the
+     * spinner is cleared here. The pending request is kept in case the
+     * redirect is merely late.
+     */
+    fun onAppResumed() {
+        if (isAuthenticating.value && pendingAuth != null) {
+            isAuthenticating.value = false
         }
     }
 
@@ -128,6 +146,8 @@ class GoogleAuthManager(
         val error = uri.getQueryParameter("error")
         if (error != null) {
             Log.w(TAG, "Sign-in was rejected by the user or server: $error")
+            // The user declining isn't worth an alert.
+            if (error != "access_denied") signInError.value = "Google sign-in failed ($error)."
             isAuthenticating.value = false
             return
         }
@@ -146,6 +166,7 @@ class GoogleAuthManager(
             isSignedIn.value = true
         } catch (e: Exception) {
             Log.e(TAG, "Token exchange failed", e)
+            signInError.value = "Couldn't finish signing in. Check your connection and try again."
         } finally {
             isAuthenticating.value = false
         }
@@ -208,7 +229,7 @@ class GoogleAuthManager(
         if (statusCode in 400..499) {
             // The refresh token was revoked or expired: drop the session.
             Log.w(TAG, "Refresh token rejected ($statusCode); signing out")
-            clearTokens()
+            signOut()
             throw NotSignedInException()
         }
 
@@ -237,6 +258,7 @@ class GoogleAuthManager(
         isSignedIn.value = false
         userName.value = null
         userEmail.value = null
+        userPhotoUrl.value = null
     }
 
     private fun clearTokens() {
@@ -253,6 +275,7 @@ class GoogleAuthManager(
         val (_, userJson) = executeJson(request)
         userEmail.value = userJson["email"]?.jsonPrimitive?.content
         userName.value = userJson["name"]?.jsonPrimitive?.content
+        userPhotoUrl.value = userJson["picture"]?.jsonPrimitive?.content
     }
 
     private suspend fun executeJson(request: Request): Pair<Int, kotlinx.serialization.json.JsonObject> {
