@@ -14,6 +14,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -43,7 +45,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.lifecycle.livedata.ktx)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
 
@@ -53,12 +54,6 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
-
-    implementation(libs.androidx.camera.core)
-    implementation(libs.androidx.camera.camera2)
-    implementation(libs.androidx.camera.lifecycle)
-    implementation(libs.androidx.camera.video)
-    implementation(libs.androidx.camera.view)
 
     implementation(libs.androidx.browser)
 
@@ -70,4 +65,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
 
     debugImplementation(libs.androidx.compose.ui.tooling)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
 }

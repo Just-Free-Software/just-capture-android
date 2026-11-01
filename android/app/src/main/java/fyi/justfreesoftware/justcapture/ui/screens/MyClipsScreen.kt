@@ -600,7 +600,14 @@ private fun ChunkThumbnail(path: String, modifier: Modifier) {
             val retriever = MediaMetadataRetriever()
             try {
                 retriever.setDataSource(path)
-                retriever.getScaledFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 320)
+                if (android.os.Build.VERSION.SDK_INT >= 27) {
+                    retriever.getScaledFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 320)
+                } else {
+                    retriever.getFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
+                        val scale = 320f / maxOf(full.width, full.height)
+                        Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
+                    }
+                }
             } catch (e: Exception) {
                 null
             } finally {
