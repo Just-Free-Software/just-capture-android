@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import fyi.justfreesoftware.justcapture.config.AppConfig
 import kotlin.reflect.KProperty
 
 /**
@@ -16,7 +17,7 @@ class Settings(context: Context) {
     private val prefs: SharedPreferences =
         context.getSharedPreferences("just_capture_settings", Context.MODE_PRIVATE)
 
-    var chunkDurationSec by doublePref("chunkDuration", 30.0)
+    var chunkDurationSec by doublePref("chunkDuration", AppConfig.DEFAULT_CHUNK_DURATION_SEC)
     var emailRecipients by stringPref("emailRecipients", "")
     var emailSubject by stringPref("emailSubject", "")
     var emailNote by stringPref("emailNote", "")

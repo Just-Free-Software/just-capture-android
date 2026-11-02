@@ -23,7 +23,7 @@ object AppConfig {
     const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
     const val USER_INFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 
-    const val DEFAULT_CHUNK_DURATION_SEC = 30.0
+    const val DEFAULT_CHUNK_DURATION_SEC = 10.0
     const val MAX_CONCURRENT_UPLOADS = 2
     const val VIDEO_WIDTH = 1920
     const val VIDEO_HEIGHT = 1080
