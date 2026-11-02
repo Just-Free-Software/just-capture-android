@@ -8,6 +8,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.audiofx.AutomaticGainControl
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
@@ -17,6 +18,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import java.io.File
+import java.nio.ByteOrder
 import java.nio.ByteBuffer
 import kotlin.math.abs
 
@@ -112,6 +114,7 @@ class ChunkRecorder(
     private var videoCodec: MediaCodec? = null
     private var audioCodec: MediaCodec? = null
     private var audioRecord: AudioRecord? = null
+    private var audioGainControl: AutomaticGainControl? = null
     private var inputSurface: Surface? = null
 
     // ---- Mux-thread state ----
@@ -220,22 +223,41 @@ class ChunkRecorder(
     }
 
     @SuppressLint("MissingPermission")
+    private fun openMic(sampleRate: Int, channelMask: Int): AudioRecord? {
+        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, channelMask, AudioFormat.ENCODING_PCM_16BIT)
+        if (minBuffer <= 0) return null
+        val channels = if (channelMask == AudioFormat.CHANNEL_IN_STEREO) 2 else 1
+        val record = runCatching {
+            AudioRecord(
+                MediaRecorder.AudioSource.CAMCORDER,
+                sampleRate,
+                channelMask,
+                AudioFormat.ENCODING_PCM_16BIT,
+                maxOf(minBuffer * 4, AUDIO_SAMPLES_PER_FRAME * 2 * channels * 8)
+            )
+        }.getOrNull() ?: return null
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            record.release()
+            return null
+        }
+        return record
+    }
+
     private fun startAudio() {
         val sampleRate = listOf(48_000, 44_100).firstOrNull {
             AudioRecord.getMinBufferSize(it, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT) > 0
         } ?: throw IllegalStateException("The microphone isn't available.")
-        val minBuffer = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val record = AudioRecord(
-            MediaRecorder.AudioSource.CAMCORDER,
-            sampleRate,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(minBuffer * 4, AUDIO_SAMPLES_PER_FRAME * 2 * 8)
-        )
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
-            record.release()
-            throw IllegalStateException("The microphone couldn't be opened.")
-        }
+        // Stereo where the phone allows it, mixed down to mono below. Capturing
+        // both mics means one dead or covered mic doesn't silence the recording.
+        val record = openMic(sampleRate, AudioFormat.CHANNEL_IN_STEREO)
+            ?: openMic(sampleRate, AudioFormat.CHANNEL_IN_MONO)
+            ?: throw IllegalStateException("The microphone couldn't be opened.")
+        val isStereo = record.channelCount == 2
+        Log.i(TAG, "Mic opened: ${if (isStereo) "stereo" else "mono"}, $sampleRate Hz")
+        audioGainControl = if (AutomaticGainControl.isAvailable()) {
+            runCatching { AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true } }.getOrNull()
+        } else null
+        Log.i(TAG, "Automatic gain control: ${if (audioGainControl?.enabled == true) "on" else "not available"}")
         audioRecord = record
 
         val format = MediaFormat.createAudioFormat(AUDIO_MIME, sampleRate, 1).apply {
@@ -250,6 +272,11 @@ class ChunkRecorder(
         val timestamp = AudioTimestamp()
         var framesRead = 0L
         var lastPtsUs = Long.MIN_VALUE
+        // Mic data is read into these arrays, mixed to mono, then copied into
+        // the encoder's buffer.
+        val mono = ShortArray(AUDIO_SAMPLES_PER_FRAME)
+        val stereo = ShortArray(AUDIO_SAMPLES_PER_FRAME * 2)
+        val downmixer = StereoDownmixer()
 
         codec.setCallback(object : MediaCodec.Callback() {
             override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
@@ -262,12 +289,22 @@ class ChunkRecorder(
                 }
                 buffer.clear()
                 // Blocks for about one AAC frame, which paces the loop.
-                val read = record.read(buffer, minOf(buffer.capacity(), pcmBytesPerRead))
-                if (read <= 0) {
+                val wanted = minOf(buffer.capacity(), pcmBytesPerRead) / 2
+                val frames = if (isStereo) {
+                    val read = record.read(stereo, 0, wanted * 2)
+                    if (read > 0 && downmixer.mix(stereo, read / 2, mono)) {
+                        Log.i(TAG, "Mic mix: ${downmixer.mode} (L ${"%.0f".format(downmixer.leftLevelDb)} dB, R ${"%.0f".format(downmixer.rightLevelDb)} dB)")
+                    }
+                    if (read > 0) read / 2 else read
+                } else {
+                    record.read(mono, 0, wanted)
+                }
+                if (frames <= 0) {
                     runCatching { codec.queueInputBuffer(index, 0, 0, maxOf(lastPtsUs + 1, 0), 0) }
                     return
                 }
-                val frames = read / 2
+                buffer.order(ByteOrder.nativeOrder()).asShortBuffer().put(mono, 0, frames)
+                val read = frames * 2
                 // Timestamp of this read's first frame on the monotonic clock,
                 // from the HAL's own record of when frames were captured.
                 var ptsUs = if (record.getTimestamp(timestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
@@ -606,11 +643,14 @@ class ChunkRecorder(
         // release them there so a blocking read isn't torn down mid-call.
         val audio = audioCodec
         val record = audioRecord
+        val gainControl = audioGainControl
         audioCodec = null
         audioRecord = null
+        audioGainControl = null
         audioHandler.post {
             runCatching { audio?.stop() }
             runCatching { audio?.release() }
+            runCatching { gainControl?.release() }
             runCatching { record?.stop() }
             runCatching { record?.release() }
         }
