@@ -25,7 +25,6 @@ import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -51,6 +50,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
@@ -58,6 +58,7 @@ import fyi.justfreesoftware.justcapture.services.DriveSessionDownloader
 import fyi.justfreesoftware.justcapture.services.GoogleDriveService
 import fyi.justfreesoftware.justcapture.services.SharedFolder
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
+import fyi.justfreesoftware.justcapture.ui.theme.CardShape
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeBanner
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeStyle
 import fyi.justfreesoftware.justcapture.ui.theme.SectionHeader
@@ -129,7 +130,7 @@ fun WatchScreen(graph: AppGraph) {
                             OutlinedTextField(
                                 value = linkText,
                                 onValueChange = { linkText = it },
-                                placeholder = { Text("drive.google.com/drive/folders/…") },
+                                placeholder = { Text("drive.google.com/drive/folders/…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
                                 keyboardActions = KeyboardActions(onGo = { openLink() }),
@@ -145,7 +146,6 @@ fun WatchScreen(graph: AppGraph) {
                         Button(
                             onClick = ::openLink,
                             enabled = linkFolderId != null,
-                            colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent),
                             modifier = Modifier.fillMaxWidth()
                         ) { Text("Download & Play", fontWeight = FontWeight.SemiBold) }
                     }
@@ -167,7 +167,7 @@ fun WatchScreen(graph: AppGraph) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SectionHeader("Saved", Modifier.weight(1f))
                         if (isChecking) {
-                            CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                            CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
                         }
                     }
                 }
@@ -185,7 +185,7 @@ fun WatchScreen(graph: AppGraph) {
                     items(folders, key = { it.id }) { folder ->
                         Box(
                             modifier = Modifier
-                                .clip(RoundedCornerShape(18.dp))
+                                .clip(CardShape)
                                 .combinedClickable(
                                     onClick = { playing = PlaybackTarget(folder.id, folder.name) },
                                     onLongClick = { folderToDelete = folder },
@@ -249,7 +249,7 @@ private fun DriveFolderRow(title: String, subtitle: String, newClipCount: Int) {
         Box(
             modifier = Modifier
                 .size(44.dp)
-                .background(AppColors.accent.copy(alpha = 0.15f), RoundedCornerShape(12.dp)),
+                .background(AppColors.accentContainer, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
             Icon(Icons.Filled.Folder, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(20.dp))

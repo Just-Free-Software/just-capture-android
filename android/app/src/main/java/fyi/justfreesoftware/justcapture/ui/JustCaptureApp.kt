@@ -1,27 +1,26 @@
 package fyi.justfreesoftware.justcapture.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkEmailUnread
-import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.VideoLibrary
@@ -45,16 +44,20 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
+import fyi.justfreesoftware.justcapture.R
 import fyi.justfreesoftware.justcapture.ui.screens.MyClipsScreen
 import fyi.justfreesoftware.justcapture.ui.screens.RecordingScreen
 import fyi.justfreesoftware.justcapture.ui.screens.SettingsScreen
@@ -86,8 +89,11 @@ private fun MainTabs(graph: AppGraph) {
 
     Scaffold(
         containerColor = AppColors.background,
+        // Each screen pads for the status bar itself (the camera preview runs
+        // underneath it), so the scaffold only reserves the bottom bar.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
-            NavigationBar(containerColor = Color(0xFF0E0E13)) {
+            NavigationBar(containerColor = AppColors.surface, tonalElevation = 0.dp) {
                 tabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
                         selected = selectedTab == index,
@@ -97,7 +103,7 @@ private fun MainTabs(graph: AppGraph) {
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AppColors.accent,
                             selectedTextColor = AppColors.accent,
-                            indicatorColor = AppColors.accent.copy(alpha = 0.15f),
+                            indicatorColor = AppColors.accentContainer,
                             unselectedIconColor = AppColors.secondaryText,
                             unselectedTextColor = AppColors.secondaryText
                         )
@@ -132,15 +138,20 @@ private fun SignInScreen(graph: AppGraph) {
             .fillMaxSize()
             .background(AppColors.background)
     ) {
-        // Soft brand glow behind the logo.
+        // Warm glow behind the logo, like the one behind the icon's camcorder.
         Box(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = (-40).dp)
-                .size(360.dp)
-                .blur(120.dp)
-                .alpha(0.35f)
-                .background(AppColors.brandGradient, CircleShape)
+                .fillMaxSize()
+                .drawBehind {
+                    drawRect(
+                        Brush.radialGradient(
+                            0f to AppColors.accent.copy(alpha = 0.18f),
+                            1f to Color.Transparent,
+                            center = Offset(size.width / 2, size.height * 0.36f),
+                            radius = size.width * 0.85f
+                        )
+                    )
+                }
         )
 
         Column(
@@ -152,19 +163,13 @@ private fun SignInScreen(graph: AppGraph) {
         ) {
             Spacer(Modifier.weight(1f))
 
-            Box(
+            Image(
+                painter = painterResource(R.drawable.app_logo),
+                contentDescription = null,
                 modifier = Modifier
                     .size(112.dp)
-                    .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(30.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Filled.RadioButtonChecked,
-                    contentDescription = null,
-                    tint = Color(0xFFFF5959),
-                    modifier = Modifier.size(64.dp)
-                )
-            }
+                    .clip(RoundedCornerShape(28.dp))
+            )
             Spacer(Modifier.height(24.dp))
 
             Text("Just Capture", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
@@ -191,10 +196,8 @@ private fun SignInScreen(graph: AppGraph) {
                 onClick = { graph.authManager.signIn(context) },
                 enabled = !isAuthenticating,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color.White,
-                    contentColor = Color.Black,
-                    disabledContainerColor = Color.White.copy(alpha = 0.7f),
-                    disabledContentColor = Color.Black
+                    disabledContainerColor = AppColors.accent.copy(alpha = 0.6f),
+                    disabledContentColor = AppColors.onAccent
                 ),
                 shape = RoundedCornerShape(50),
                 modifier = Modifier
@@ -202,7 +205,7 @@ private fun SignInScreen(graph: AppGraph) {
                     .height(54.dp)
             ) {
                 if (isAuthenticating) {
-                    CircularProgressIndicator(color = Color.Black, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                    CircularProgressIndicator(color = AppColors.onAccent, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
                 } else {
                     Icon(Icons.Filled.AccountCircle, contentDescription = null)
                 }
@@ -238,8 +241,15 @@ private fun SignInScreen(graph: AppGraph) {
 
 @Composable
 private fun Feature(icon: ImageVector, text: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Icon(icon, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(26.dp))
-        Text(text, color = Color.White.copy(alpha = 0.85f), fontSize = 15.sp)
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(AppColors.accentContainer, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(22.dp))
+        }
+        Text(text, color = Color.White.copy(alpha = 0.88f), fontSize = 15.sp)
     }
 }

@@ -51,7 +51,6 @@ import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -80,7 +79,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -97,6 +95,8 @@ import fyi.justfreesoftware.justcapture.ui.components.icon
 import fyi.justfreesoftware.justcapture.ui.components.label
 import fyi.justfreesoftware.justcapture.ui.components.statusSummary
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
+import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
+import fyi.justfreesoftware.justcapture.ui.theme.CardShape
 import fyi.justfreesoftware.justcapture.ui.theme.SectionHeader
 import fyi.justfreesoftware.justcapture.ui.theme.StatView
 import fyi.justfreesoftware.justcapture.ui.theme.StatusBadge
@@ -205,7 +205,7 @@ private fun SessionRow(session: RecordingSession, onClick: () -> Unit, onLongCli
     val status = session.statusSummary
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(18.dp))
+            .clip(CardShape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick, onLongClickLabel = "Delete session")
             .card(12.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -390,7 +390,7 @@ private fun OverviewCard(
                     color = Color.White,
                     fontSize = 34.sp,
                     fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
+                    style = TabularNumbers
                 )
                 Text(
                     "${Formatters.bytes(session.totalBytes)} · ${session.chunkDurationSec.toInt()}s clips",
@@ -420,7 +420,6 @@ private fun OverviewCard(
             session.driveFolderLink?.let { link ->
                 Button(
                     onClick = { onOpenDrive(link) },
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent),
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -525,7 +524,7 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
             color = Color.White,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            fontFamily = FontFamily.Monospace,
+            style = TabularNumbers,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(8.dp)
@@ -534,7 +533,7 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .padding(4.dp)
-                .background(Color.Black.copy(alpha = 0.4f), CircleShape)
+                .background(AppColors.overlay, CircleShape)
                 .padding(5.dp)
         ) {
             Icon(chunk.status.icon, contentDescription = null, tint = chunk.status.color, modifier = Modifier.size(14.dp))
@@ -552,7 +551,7 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
                     color = Color.White,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
+                    style = TabularNumbers,
                     modifier = Modifier.weight(1f)
                 )
                 if (!localFileExists) {

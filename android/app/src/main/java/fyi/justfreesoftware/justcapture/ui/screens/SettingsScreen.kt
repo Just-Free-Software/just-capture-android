@@ -34,7 +34,6 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -202,8 +201,10 @@ fun SettingsScreen(graph: AppGraph) {
                             onClick = { settings.chunkDurationSec = value },
                             shape = SegmentedButtonDefaults.itemShape(index, options.size),
                             colors = SegmentedButtonDefaults.colors(
-                                activeContainerColor = AppColors.accent.copy(alpha = 0.25f),
-                                activeContentColor = Color.White,
+                                activeContainerColor = AppColors.accentContainer,
+                                activeContentColor = AppColors.accent,
+                                activeBorderColor = AppColors.stroke,
+                                inactiveBorderColor = AppColors.stroke,
                                 inactiveContainerColor = Color.Transparent,
                                 inactiveContentColor = AppColors.secondaryText
                             )
@@ -258,7 +259,7 @@ fun SettingsScreen(graph: AppGraph) {
                         Text("Send Test Email", color = AppColors.accent, fontSize = 16.sp, modifier = Modifier.weight(1f))
                         when (val state = testEmailState) {
                             TestEmailState.Idle -> {}
-                            TestEmailState.Sending -> CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                            TestEmailState.Sending -> CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
                             TestEmailState.Sent -> StatusLabel("Sent", Icons.Filled.CheckCircle, AppColors.success)
                             is TestEmailState.Failed -> StatusLabel(state.message, Icons.Filled.Warning, AppColors.record)
                         }
@@ -352,7 +353,7 @@ fun SettingsScreen(graph: AppGraph) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Refresh Storage", color = AppColors.accent, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                    if (isRefreshingStorage) CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                    if (isRefreshingStorage) CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
                 }
                 deviceFreeBytes?.let { free ->
                     Divider()
@@ -411,11 +412,11 @@ private fun Section(
 ) {
     Column(modifier = Modifier.padding(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
-            header.uppercase(),
-            color = AppColors.secondaryText,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(start = 16.dp)
+            header,
+            color = AppColors.accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp, bottom = 2.dp)
         )
         Column(modifier = Modifier.card(), verticalArrangement = Arrangement.spacedBy(12.dp), content = content)
         if (footer != null) {
@@ -452,11 +453,7 @@ private fun Divider() = HorizontalDivider(color = AppColors.stroke)
 private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(label, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
-        Switch(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = SwitchDefaults.colors(checkedTrackColor = AppColors.accent)
-        )
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 

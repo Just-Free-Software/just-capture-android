@@ -1,8 +1,12 @@
 package fyi.justfreesoftware.justcapture.ui.theme
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -22,51 +26,72 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Shared look for the whole app: one dark palette, one card style, one set
- * of status colours, matching the iOS app's Theme.
+ * Shared look for the whole app, taken from the launcher icon: a warm
+ * near-black background, solid warm-brown surfaces and the icon's orange as
+ * the accent. Surfaces are opaque and separated by tone, not translucency.
  */
 object AppColors {
-    val background = Color(0xFF0A0A0F)
-    val surface = Color.White.copy(alpha = 0.06f)
-    val surfaceRaised = Color.White.copy(alpha = 0.10f)
-    val stroke = Color.White.copy(alpha = 0.08f)
-    val secondaryText = Color.White.copy(alpha = 0.6f)
-    val tertiaryText = Color.White.copy(alpha = 0.4f)
+    val background = Color(0xFF110C09)
+    val surface = Color(0xFF1C1511)
+    val surfaceRaised = Color(0xFF2A201A)
+    val stroke = Color(0xFF3A2E26)
+    val secondaryText = Color(0xFFBBAFA5)
+    val tertiaryText = Color(0xFF85786E)
 
-    val accent = Color(0xFF5C8CFF)
-    val record = Color(0xFFFF4545)
-    val success = Color(0xFF40D687)
-    val warning = Color(0xFFFFAD33)
+    val accent = Color(0xFFFF8A3A)
+    val onAccent = Color(0xFF2B1206)
+    val accentContainer = Color(0xFF3D2416)
+    val record = Color(0xFFFF453A)
+    val success = Color(0xFF4CD08A)
+    val warning = Color(0xFFF5C542)
 
-    val overlay = Color.Black.copy(alpha = 0.45f)
+    /** Backing for controls drawn over the camera preview. */
+    val overlay = Color(0xE0110C09)
 
-    val brandGradient = Brush.linearGradient(listOf(Color(0xFFFF5959), Color(0xFF9E54FF)))
+    val brandGradient = Brush.linearGradient(listOf(Color(0xFFFFA552), Color(0xFFFF6A1E)))
 }
 
-val CardShape = RoundedCornerShape(18.dp)
+val CardShape = RoundedCornerShape(16.dp)
+
+/** Fixed-width digits so timers and counters don't jitter as they change. */
+val TabularNumbers = TextStyle(fontFeatureSettings = "tnum")
 
 private val DarkColors = darkColorScheme(
     primary = AppColors.accent,
-    onPrimary = Color.White,
+    onPrimary = AppColors.onAccent,
+    primaryContainer = AppColors.accentContainer,
+    onPrimaryContainer = Color(0xFFFFDBC7),
     secondary = AppColors.accent,
+    onSecondary = AppColors.onAccent,
+    secondaryContainer = AppColors.accentContainer,
+    onSecondaryContainer = Color(0xFFFFDBC7),
     background = AppColors.background,
     onBackground = Color.White,
-    surface = Color(0xFF16161C),
+    surface = AppColors.background,
     onSurface = Color.White,
-    surfaceVariant = Color(0xFF1E1E26),
+    surfaceVariant = AppColors.surfaceRaised,
     onSurfaceVariant = AppColors.secondaryText,
-    surfaceContainer = Color(0xFF121218),
-    error = AppColors.record
+    surfaceTint = AppColors.accent,
+    surfaceContainerLowest = Color(0xFF0B0806),
+    surfaceContainerLow = Color(0xFF17110E),
+    surfaceContainer = AppColors.surface,
+    surfaceContainerHigh = Color(0xFF241B16),
+    surfaceContainerHighest = AppColors.surfaceRaised,
+    outline = Color(0xFF6B5A4E),
+    outlineVariant = AppColors.stroke,
+    error = AppColors.record,
+    onError = Color.White
 )
 
 @Composable
@@ -79,10 +104,9 @@ fun JustCaptureTheme(content: @Composable () -> Unit) {
 fun Modifier.card(padding: Dp = 16.dp): Modifier = this
     .fillMaxWidth()
     .background(AppColors.surface, CardShape)
-    .border(1.dp, AppColors.stroke, CardShape)
     .padding(padding)
 
-/** Translucent pill used for overlays on top of the camera preview. */
+/** Dark pill used for overlays on top of the camera preview. */
 fun Modifier.overlayPill(): Modifier = this
     .background(AppColors.overlay, RoundedCornerShape(50))
     .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -120,30 +144,41 @@ fun NoticeBanner(
     onAction: (() -> Unit)? = null,
     onDismiss: (() -> Unit)? = null
 ) {
-    val shape = RoundedCornerShape(16.dp)
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color(0xE6141418), shape)
-            .background(style.color.copy(alpha = 0.18f), shape)
-            .padding(14.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+            .height(IntrinsicSize.Min)
+            .clip(CardShape)
+            .background(AppColors.surfaceRaised)
     ) {
-        Icon(icon, contentDescription = null, tint = style.color, modifier = Modifier.size(20.dp))
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            if (message != null) {
-                Text(message, color = AppColors.secondaryText, fontSize = 12.sp)
-            }
-            if (actionTitle != null && onAction != null) {
-                TextButton(onClick = onAction, contentPadding = androidx.compose.foundation.layout.PaddingValues(0.dp)) {
-                    Text(actionTitle, color = style.color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Box(
+            Modifier
+                .width(4.dp)
+                .fillMaxHeight()
+                .background(style.color)
+        )
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp, top = 14.dp, end = 14.dp, bottom = 14.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(icon, contentDescription = null, tint = style.color, modifier = Modifier.size(20.dp))
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                if (message != null) {
+                    Text(message, color = AppColors.secondaryText, fontSize = 12.sp)
+                }
+                if (actionTitle != null && onAction != null) {
+                    TextButton(onClick = onAction, contentPadding = PaddingValues(0.dp)) {
+                        Text(actionTitle, color = style.color, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
-        }
-        if (onDismiss != null) {
-            IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = AppColors.secondaryText, modifier = Modifier.size(16.dp))
+            if (onDismiss != null) {
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = "Dismiss", tint = AppColors.secondaryText, modifier = Modifier.size(16.dp))
+                }
             }
         }
     }
@@ -153,7 +188,7 @@ fun NoticeBanner(
 @Composable
 fun StatView(title: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(value, color = color, fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+        Text(value, color = color, fontSize = 24.sp, fontWeight = FontWeight.Bold, style = TabularNumbers)
         Text(title, color = AppColors.secondaryText, fontSize = 12.sp)
     }
 }
@@ -162,8 +197,8 @@ fun StatView(title: String, value: String, color: Color, modifier: Modifier = Mo
 fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
-        color = AppColors.secondaryText,
-        fontSize = 14.sp,
+        color = AppColors.accent,
+        fontSize = 13.sp,
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(top = 4.dp)
     )

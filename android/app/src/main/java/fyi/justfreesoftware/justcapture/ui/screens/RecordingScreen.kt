@@ -8,14 +8,20 @@ import android.net.Uri
 import android.provider.Settings as AndroidSettings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,11 +31,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -38,10 +42,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudUpload
@@ -51,15 +53,12 @@ import androidx.compose.material.icons.filled.FlashlightOn
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material.icons.filled.LocationOn
-import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -77,6 +76,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -84,9 +84,9 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -101,6 +101,7 @@ import fyi.justfreesoftware.justcapture.services.DriveStorageManager.StorageStat
 import fyi.justfreesoftware.justcapture.startRecording
 import fyi.justfreesoftware.justcapture.ui.components.PulseIndicator
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
+import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeBanner
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeStyle
 import fyi.justfreesoftware.justcapture.ui.theme.overlayPill
@@ -110,6 +111,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private const val CONTROL_SIZE = 54
+private const val SIDE_PADDING = 18
+private const val TAIL_WIDTH = 22
 
 fun openAppSettings(context: Context) {
     runCatching {
@@ -261,13 +264,16 @@ fun RecordingScreen(graph: AppGraph) {
                         Text(
                             Formatters.duration(camera.elapsedTimeSec),
                             color = Color.White,
-                            fontFamily = FontFamily.Monospace,
+                            style = TabularNumbers,
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 17.sp
                         )
                     }
                     Spacer(Modifier.weight(1f))
                     liveSession?.let { UploadPill(it, storageExceeded) }
+                }
+                liveEmailJob?.let { job ->
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { EmailStatusLine(job) }
                 }
             } else {
                 ReadinessPills(
@@ -279,10 +285,12 @@ fun RecordingScreen(graph: AppGraph) {
                 )
             }
 
-            // Banners scroll if several stack up on a small screen.
+            // Banners fill the space between the pills and the controls
+            // (scrolling if several stack up), which keeps the controls on
+            // the bottom edge.
             Column(
                 modifier = Modifier
-                    .weight(1f, fill = false)
+                    .weight(1f)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -337,11 +345,8 @@ fun RecordingScreen(graph: AppGraph) {
                 }
             }
 
-            Spacer(Modifier.weight(1f))
-
             BottomControls(
                 graph = graph,
-                liveEmailJob = liveEmailJob,
                 cameraUnavailable = !cameraPermissionGranted,
                 onToggleRecording = ::toggleRecording
             )
@@ -405,7 +410,7 @@ private fun ReadinessPills(
         if (recipientCount > 0) {
             ReadinessPill(Icons.Filled.Email, "$recipientCount contact${if (recipientCount == 1) "" else "s"}", Color.White)
         } else {
-            ReadinessPill(Icons.Filled.NotificationsOff, "No alerts", AppColors.warning)
+            ReadinessPill(Icons.Filled.Email, "No contacts", AppColors.warning)
         }
         val (driveText, driveColor) = when (driveState) {
             StorageState.OK -> (driveAvailable?.let { Formatters.storageBytes(it) } ?: "Drive") to Color.White
@@ -414,7 +419,11 @@ private fun ReadinessPills(
             StorageState.UNLIMITED -> "Unlimited" to Color.White
             StorageState.UNAVAILABLE -> "Drive" to Color.White
         }
-        ReadinessPill(Icons.Filled.Storage, driveText, driveColor)
+        ReadinessPill(
+            if (driveState == StorageState.OUT) Icons.Filled.CloudOff else Icons.Filled.Cloud,
+            driveText,
+            driveColor
+        )
         if (deviceLow) ReadinessPill(Icons.Filled.PhoneAndroid, "Phone low", AppColors.warning)
         if (locationOn) {
             ReadinessPill(Icons.Filled.LocationOn, "Location", Color.White)
@@ -462,7 +471,7 @@ private fun UploadPill(session: RecordingSession, storageExceeded: Boolean) {
             color = color,
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
-            fontFamily = FontFamily.Monospace
+            style = TabularNumbers
         )
     }
 }
@@ -470,7 +479,6 @@ private fun UploadPill(session: RecordingSession, storageExceeded: Boolean) {
 @Composable
 private fun BottomControls(
     graph: AppGraph,
-    liveEmailJob: EmailJob?,
     cameraUnavailable: Boolean,
     onToggleRecording: () -> Unit
 ) {
@@ -480,34 +488,30 @@ private fun BottomControls(
     var tipDontShowAgain by remember { mutableStateOf(false) }
     val showTip = !settings.hideSendClipTip && !tipDismissed && !cameraUnavailable
 
+    // Anchored to the bottom, so anything added above the shutter row grows
+    // upward and the shutter never moves.
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (camera.isRecording) {
-            liveEmailJob?.let { EmailStatusLine(it) }
-        } else {
-            Text(
-                "Clips upload every ${settings.chunkDurationSec.toInt()}s",
-                color = AppColors.secondaryText,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
-
-        Box(modifier = Modifier.fillMaxWidth()) {
-            // Send clip now floats above the torch without changing the row's
-            // layout; its tip floats above it.
-            Column(
+        // Send clip now sits above the torch. Its tip floats above it over the
+        // viewfinder: a zero-height anchor lets it overflow upward without
+        // taking up layout space or pushing the controls around.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = SIDE_PADDING.dp)
+        ) {
+            Box(
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(start = 24.dp)
-                    .offset(y = (-(CONTROL_SIZE + 14)).dp)
+                    .align(Alignment.TopStart)
+                    .height(0.dp)
+                    .wrapContentHeight(Alignment.Bottom, unbounded = true)
             ) {
-                AnimatedVisibility(visible = showTip, enter = fadeIn(), exit = fadeOut()) {
+                androidx.compose.animation.AnimatedVisibility(visible = showTip, enter = fadeIn(), exit = fadeOut()) {
                     SendClipTip(
                         chunkSeconds = settings.chunkDurationSec.toInt(),
                         dontShowAgain = tipDontShowAgain,
@@ -518,45 +522,59 @@ private fun BottomControls(
                         }
                     )
                 }
-                CircleControl(
-                    icon = Icons.AutoMirrored.Filled.Send,
-                    tint = Color.White,
-                    label = if (camera.isRecording) {
-                        "Send clip now. Ends clip ${camera.currentChunkIndex + 1} early and uploads it"
-                    } else "Send clip now, available while recording",
-                    enabled = camera.isRecording,
-                    onClick = camera::cutChunkNow
+            }
+            CircleControl(
+                icon = Icons.AutoMirrored.Filled.Send,
+                tint = if (camera.isRecording) AppColors.accent else Color.White,
+                label = if (camera.isRecording) {
+                    "Send clip now. Ends clip ${camera.currentChunkIndex + 1} early and uploads it"
+                } else "Send clip now, available while recording",
+                enabled = camera.isRecording,
+                onClick = camera::cutChunkNow
+            )
+            // Directly above the record button, inset so it can't run into
+            // the send button. Hidden while recording to keep the view clear.
+            if (!camera.isRecording) {
+                Text(
+                    "Recording in ${settings.chunkDurationSec.toInt()}s clips",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(horizontal = (CONTROL_SIZE + 8).dp)
                 )
             }
+        }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                CircleControl(
-                    icon = if (camera.isTorchOn) Icons.Filled.FlashlightOn else Icons.Filled.FlashlightOff,
-                    tint = if (camera.isTorchOn) Color(0xFFFFEB3B) else Color.White,
-                    label = if (camera.isTorchOn) "Turn torch off" else "Turn torch on",
-                    enabled = !camera.isUsingFrontCamera && !cameraUnavailable,
-                    onClick = camera::toggleTorch
-                )
-                Spacer(Modifier.weight(1f))
-                RecordButton(
-                    isRecording = camera.isRecording,
-                    enabled = !camera.isFinishing && !cameraUnavailable,
-                    onClick = onToggleRecording
-                )
-                Spacer(Modifier.weight(1f))
-                CircleControl(
-                    icon = Icons.Filled.Cameraswitch,
-                    tint = Color.White,
-                    label = "Switch camera",
-                    enabled = !cameraUnavailable,
-                    onClick = camera::flipCamera
-                )
-            }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = SIDE_PADDING.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            CircleControl(
+                icon = if (camera.isTorchOn) Icons.Filled.FlashlightOn else Icons.Filled.FlashlightOff,
+                tint = if (camera.isTorchOn) AppColors.accent else Color.White,
+                label = if (camera.isTorchOn) "Turn torch off" else "Turn torch on",
+                enabled = !camera.isUsingFrontCamera && !cameraUnavailable,
+                onClick = camera::toggleTorch
+            )
+            RecordButton(
+                isRecording = camera.isRecording,
+                enabled = !camera.isFinishing && !cameraUnavailable,
+                onClick = onToggleRecording
+            )
+            CircleControl(
+                icon = Icons.Filled.Cameraswitch,
+                tint = Color.White,
+                label = "Switch camera",
+                enabled = !cameraUnavailable,
+                onClick = camera::flipCamera
+            )
         }
     }
 }
@@ -568,7 +586,7 @@ private fun SendClipTip(
     onToggleDontShowAgain: () -> Unit,
     onClose: () -> Unit
 ) {
-    val background = Color.Black.copy(alpha = 0.8f)
+    val background = AppColors.surfaceRaised
     Column(modifier = Modifier.padding(bottom = 6.dp)) {
         Column(
             modifier = Modifier
@@ -615,13 +633,23 @@ private fun SendClipTip(
                 )
             }
         }
-        // Points down at the center of the send button.
-        Text(
-            "▼",
-            color = background,
-            fontSize = 12.sp,
-            modifier = Modifier.padding(start = (CONTROL_SIZE / 2 - 6).dp).offset(y = (-4).dp)
-        )
+        // Speech-bubble tail, flush with the card, pointing at the center of
+        // the send button.
+        Canvas(
+            modifier = Modifier
+                .padding(start = (CONTROL_SIZE / 2 - TAIL_WIDTH / 2).dp)
+                .size(width = TAIL_WIDTH.dp, height = 12.dp)
+        ) {
+            drawPath(
+                Path().apply {
+                    moveTo(0f, 0f)
+                    lineTo(size.width, 0f)
+                    lineTo(size.width / 2, size.height)
+                    close()
+                },
+                color = background
+            )
+        }
     }
 }
 
@@ -643,7 +671,7 @@ private fun EmailStatusLine(job: EmailJob) {
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
-        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -653,8 +681,8 @@ private fun CircleControl(icon: ImageVector, tint: Color, label: String, enabled
         modifier = Modifier
             .size(CONTROL_SIZE.dp)
             .alpha(if (enabled) 1f else 0.4f)
-            .background(AppColors.overlay, CircleShape)
-            .border(1.dp, Color.White.copy(alpha = 0.12f), CircleShape)
+            .clip(CircleShape)
+            .background(AppColors.overlay)
             .clickable(enabled = enabled, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center
@@ -701,9 +729,6 @@ private fun CameraPermissionPlaceholder(modifier: Modifier, onOpenSettings: () -
             fontSize = 14.sp,
             textAlign = TextAlign.Center
         )
-        Button(
-            onClick = onOpenSettings,
-            colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
-        ) { Text("Open Settings") }
+        Button(onClick = onOpenSettings) { Text("Open Settings", fontWeight = FontWeight.SemiBold) }
     }
 }

@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -40,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -59,6 +57,7 @@ import fyi.justfreesoftware.justcapture.model.VideoChunk
 import fyi.justfreesoftware.justcapture.services.DriveSessionDownloader
 import fyi.justfreesoftware.justcapture.services.DriveSessionDownloader.SyncState
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
+import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.card
 import fyi.justfreesoftware.justcapture.util.Formatters
 import kotlinx.coroutines.flow.filter
@@ -227,10 +226,9 @@ fun DrivePlaybackScreen(
                 Icon(Icons.Filled.CloudOff, contentDescription = null, tint = AppColors.tertiaryText, modifier = Modifier.size(52.dp))
                 Text("Couldn't Load From Drive", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Text(sync.message, color = AppColors.secondaryText, fontSize = 14.sp, textAlign = TextAlign.Center)
-                Button(
-                    onClick = { scope.launch { downloader.downloadNewClips(graph.authManager) } },
-                    colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent)
-                ) { Text("Try Again") }
+                Button(onClick = { scope.launch { downloader.downloadNewClips(graph.authManager) } }) {
+                    Text("Try Again", fontWeight = FontWeight.SemiBold)
+                }
             }
             else -> FirstDownloadProgress(downloader, Modifier.align(Alignment.Center))
         }
@@ -262,7 +260,7 @@ private fun StatusCard(
                 "$count clip${if (count == 1) "" else "s"}",
                 color = AppColors.secondaryText,
                 fontSize = 12.sp,
-                fontFamily = FontFamily.Monospace
+                style = TabularNumbers
             )
         }
 
@@ -298,7 +296,6 @@ private fun StatusCard(
                 if (newCount > 0) {
                     Button(
                         onClick = onDownload,
-                        colors = ButtonDefaults.buttonColors(containerColor = AppColors.accent),
                         modifier = Modifier.fillMaxWidth()
                     ) { Text("Get $newCount New Clip${if (newCount == 1) "" else "s"}", fontWeight = FontWeight.SemiBold) }
                 } else {
@@ -314,7 +311,7 @@ private fun StatusCard(
 @Composable
 private fun ProgressRow(text: String) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+        CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
         Text(text, color = AppColors.secondaryText, fontSize = 14.sp)
     }
 }
@@ -346,7 +343,7 @@ private fun FirstDownloadProgress(downloader: DriveSessionDownloader, modifier: 
                 }
             }
             else -> {
-                CircularProgressIndicator(color = Color.White)
+                CircularProgressIndicator(color = AppColors.accent)
                 Text(
                     if (sync == SyncState.Preparing) "Preparing playback…" else "Finding clips…",
                     color = Color.White,
