@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.CloudUpload
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MarkEmailUnread
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SlowMotionVideo
@@ -51,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
 import fyi.justfreesoftware.justcapture.R
+import fyi.justfreesoftware.justcapture.config.AppConfig
 import fyi.justfreesoftware.justcapture.ui.screens.MyClipsScreen
 import fyi.justfreesoftware.justcapture.ui.screens.RecordingScreen
 import fyi.justfreesoftware.justcapture.ui.screens.SettingsScreen
@@ -132,6 +133,7 @@ private fun SignInScreen(graph: AppGraph) {
     val isAuthenticating by graph.authManager.isAuthenticating.collectAsState()
     val signInError by graph.authManager.signInError.collectAsState()
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
 
     Box(
         modifier = Modifier
@@ -174,7 +176,7 @@ private fun SignInScreen(graph: AppGraph) {
 
             Text("Just Capture", color = Color.White, fontSize = 44.sp, fontWeight = FontWeight.Bold)
             Text(
-                "Record. Back up. Alert.",
+                "Record. Back up. Notify.",
                 color = AppColors.secondaryText,
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Medium,
@@ -185,9 +187,8 @@ private fun SignInScreen(graph: AppGraph) {
                 modifier = Modifier.padding(top = 40.dp, start = 12.dp, end = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                Feature(Icons.Filled.CloudUpload, "Every clip goes to your Google Drive the moment it's recorded.")
+                Feature(Icons.Filled.CloudUpload, "As you record, each clip is uploaded to your Google Drive when you have a connection.")
                 Feature(Icons.Filled.MarkEmailUnread, "The people you choose get an email with a link to watch.")
-                Feature(Icons.Filled.Lock, "Footage lives in your own Drive. Nothing is stored anywhere else.")
             }
 
             Spacer(Modifier.weight(1f))
@@ -222,8 +223,14 @@ private fun SignInScreen(graph: AppGraph) {
                 color = AppColors.tertiaryText,
                 fontSize = 12.sp,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 14.dp, bottom = 24.dp, start = 16.dp, end = 16.dp)
+                modifier = Modifier.padding(top = 14.dp, start = 16.dp, end = 16.dp)
             )
+            TextButton(
+                onClick = { runCatching { uriHandler.openUri(AppConfig.PRIVACY_POLICY_URL) } },
+                modifier = Modifier.padding(bottom = 12.dp)
+            ) {
+                Text("Privacy Policy", color = AppColors.secondaryText, fontSize = 12.sp)
+            }
         }
     }
 

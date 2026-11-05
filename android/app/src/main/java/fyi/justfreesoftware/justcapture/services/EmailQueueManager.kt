@@ -143,7 +143,7 @@ class EmailQueueManager(
                 createdAtEpochMs = original.createdAtEpochMs,
                 recipients = original.recipients,
                 subject = "Recording link: ${original.subject}",
-                bodyNote = "The link to the recording wasn't ready when the first alert went out. Here it is.",
+                bodyNote = "The link to the recording wasn't ready when the first email went out. Here it is.",
                 includeTime = original.includeTime,
                 isLinkFollowUp = true
             )

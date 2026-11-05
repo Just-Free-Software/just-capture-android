@@ -16,21 +16,26 @@ Package: `fyi.justfreesoftware.justcapture`
   stop footage from reaching your contacts. The screen stays on while
   recording, and recording continues while you use the other tabs.
 - **Uploads** — each clip uploads to a per-session Drive folder (resumable,
-  two at a time, retried with backoff). The folder is shared as "anyone with
-  the link", and a `playlist.m3u8` lists the clips in order. If Drive fills
-  up, clips wait on the phone and upload once space is freed.
-- **Alert emails** — sent through Gmail when recording starts, with the
+  two at a time, retried with backoff), and a `playlist.m3u8` lists the clips
+  in order. Folders stay private, and are set to "anyone with the link" only
+  when an email is queued for that recording. If Drive fills up, clips wait
+  on the phone and the app tries again once space is freed.
+- **Location** — with "Save location" on, location runs while recording and a
+  point is saved at the start and at the end of each clip, on the phone and in
+  `location.txt` in the Drive folder. Each line states its accuracy or that
+  it's a last known position, and fixes rougher than 100 m show only the
+  general area. With it off, no location is fetched at all.
+- **Notification emails** — sent through Gmail when recording starts, with the
   start time, address, map link and Drive link. Queued on disk and retried;
   if the folder link wasn't ready, a follow-up email sends it. A second
   email goes out if Drive fills up mid-recording.
 - **My Clips** — sessions with upload status, a clip grid with thumbnails,
-  retry, open in Drive, play the whole session back from Drive, and the
-  alert email outbox.
+  retry, the starting location, open in Drive, play the whole session back
+  from Drive, and the notification email outbox.
 - **Watch** — paste a Drive folder link someone shared with you to download
   and play it back to back; saved folders show when new clips have arrived.
-- **Settings** — clip length, recipients (with a test email), email subject
-  and message (`[your_name]` is replaced with your name), Drive and phone
-  storage.
+- **Settings** — clip length, save location, recipients (with a test email), email subject
+  and message, Drive and phone storage.
 
 Storage layout (app-private files): `recordings/<sessionId>/chunk_N.mp4`,
 `sessions.json`, `email_jobs.json`, `shared-folders.json`, and downloaded
@@ -44,6 +49,12 @@ Requires the Android SDK and JDK 17+ (Android Studio's bundled JBR works):
 cd android
 ./gradlew assembleDebug
 ./gradlew installDebug
+```
+
+Unit tests cover the location trail and need no device:
+
+```
+./gradlew testDebugUnitTest
 ```
 
 The recorder has an instrumented test that records on the device's camera

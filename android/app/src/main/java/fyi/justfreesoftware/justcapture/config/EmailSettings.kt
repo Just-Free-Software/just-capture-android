@@ -3,7 +3,7 @@ package fyi.justfreesoftware.justcapture.config
 import fyi.justfreesoftware.justcapture.data.Settings
 
 /**
- * Snapshot of the alert-email preferences the Settings screen writes.
+ * Snapshot of the notification-email preferences the Settings screen writes.
  */
 data class EmailSettings(
     val alertsEnabled: Boolean,
@@ -11,6 +11,11 @@ data class EmailSettings(
     val subject: String,
     val note: String,
     val includeTime: Boolean,
+    /**
+     * The app-wide location switch, not just an email option: when off, the
+     * app doesn't fetch location for recordings or emails. The storage key
+     * keeps its older email-specific name so existing choices carry over.
+     */
     val includeLocation: Boolean
 ) {
     /** Whether an alert would actually go out with these settings. */
@@ -18,17 +23,25 @@ data class EmailSettings(
         get() = alertsEnabled && recipients.isNotEmpty()
 
     companion object {
-        const val DEFAULT_SUBJECT = "Alert! [your_name] is broadcasting"
-        const val NAME_TOKEN = "[your_name]"
+        const val DEFAULT_SUBJECT = "I have started a recording"
 
-        /** Subject used by early builds; treated as "not customised". */
-        const val LEGACY_SUBJECT = "🚨 Emergency Recording Alert"
+        /**
+         * Defaults from earlier builds. Settings used to save the default into
+         * storage, so these are treated as "not customised" and replaced.
+         */
+        private val LEGACY_SUBJECTS = setOf(
+            "🚨 Emergency Recording Alert",
+            "Alert! [your_name] is broadcasting",
+            "[your_name] started recording"
+        )
+
+        fun isDefaultSubject(subject: String): Boolean = subject.isEmpty() || subject in LEGACY_SUBJECTS
 
         /** Note for the second email, sent if Drive fills up mid-recording. */
         const val STORAGE_FULL_NOTE =
             "Google Drive storage is full, so new clips cannot be uploaded right now. " +
-                "Recording is still in progress and the app will keep retrying — clips will " +
-                "upload automatically as soon as storage is freed."
+                "Recording is still in progress and the app will keep retrying — it will try to " +
+                "upload the remaining clips once storage is freed."
 
         private val SEPARATORS = Regex("[,;\\s]+")
         private val EMAIL = Regex("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")
@@ -38,7 +51,7 @@ data class EmailSettings(
             return EmailSettings(
                 alertsEnabled = settings.emailAlertsEnabled,
                 recipients = parseRecipients(settings.emailRecipients),
-                subject = if (rawSubject.isEmpty() || rawSubject == LEGACY_SUBJECT) DEFAULT_SUBJECT else rawSubject,
+                subject = if (isDefaultSubject(rawSubject)) DEFAULT_SUBJECT else rawSubject,
                 note = settings.emailNote.trim(),
                 includeTime = settings.includeTimeInEmail,
                 includeLocation = settings.includeLocationInEmail
@@ -50,16 +63,5 @@ data class EmailSettings(
             raw.split(SEPARATORS).map { it.trim() }.filter { it.isNotEmpty() }
 
         fun isValidEmail(address: String): Boolean = EMAIL.matches(address)
-
-        /**
-         * Replaces the `[your_name]` placeholder so recipients see who is
-         * actually broadcasting instead of the literal token.
-         */
-        fun personalize(text: String, name: String?, email: String?): String {
-            val display = listOf(name, email)
-                .mapNotNull { it?.trim() }
-                .firstOrNull { it.isNotEmpty() } ?: "Someone"
-            return text.replace(NAME_TOKEN, display)
-        }
     }
 }

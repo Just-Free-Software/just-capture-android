@@ -318,6 +318,15 @@ object GoogleDriveService {
         folderId: String,
         existingFileId: String?,
         accessToken: String
+    ): String = uploadOrUpdateTextFile("playlist.m3u8", "application/x-mpegURL", content, folderId, existingFileId, accessToken)
+
+    suspend fun uploadOrUpdateTextFile(
+        name: String,
+        mimeType: String,
+        content: String,
+        folderId: String,
+        existingFileId: String?,
+        accessToken: String
     ): String {
         val boundary = "Boundary-${UUID.randomUUID()}"
         val isUpdate = existingFileId != null
@@ -328,9 +337,9 @@ object GoogleDriveService {
         }
 
         val metadata = buildJsonObject {
-            put("mimeType", "application/x-mpegURL")
+            put("mimeType", mimeType)
             if (!isUpdate) {
-                put("name", "playlist.m3u8")
+                put("name", name)
                 put("parents", buildJsonArray { add(folderId) })
             }
         }
@@ -341,7 +350,7 @@ object GoogleDriveService {
             append(metadata.toString())
             append("\r\n")
             append("--$boundary\r\n")
-            append("Content-Type: application/x-mpegURL\r\n\r\n")
+            append("Content-Type: $mimeType; charset=UTF-8\r\n\r\n")
             append(content)
             append("\r\n")
             append("--$boundary--")
@@ -357,7 +366,7 @@ object GoogleDriveService {
             val text = response.body?.string() ?: ""
             throwIfQuotaExceeded(text, response.code)
             return parse(text)?.get("id")?.jsonPrimitive?.content
-                ?: throw IOException("Playlist upload failed: ${response.code}")
+                ?: throw IOException("Upload of $name failed: ${response.code}")
         }
     }
 

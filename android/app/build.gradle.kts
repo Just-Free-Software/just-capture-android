@@ -12,8 +12,8 @@ android {
         applicationId = "fyi.justfreesoftware.justcapture"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -66,6 +66,7 @@ dependencies {
 
     debugImplementation(libs.androidx.compose.ui.tooling)
 
+    testImplementation("junit:junit:4.13.2")
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.rules)
     androidTestImplementation(libs.androidx.test.ext.junit)

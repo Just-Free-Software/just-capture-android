@@ -7,8 +7,7 @@ object AppConfig {
     val OAUTH_SCOPES = listOf(
         "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/userinfo.email",
-        "https://www.googleapis.com/auth/userinfo.profile"
+        "https://www.googleapis.com/auth/userinfo.email"
     )
 
     /**
@@ -17,7 +16,7 @@ object AppConfig {
      * package + signing certificate in Cloud Console; it ships in the app,
      * so treat it as public.
      */
-    const val DRIVE_API_KEY = "AIzaSyBRjrEWpSUE80PWNgTGPUPFS-uw1WzYJag"
+    const val DRIVE_API_KEY = "AIzaSyBpcpUL9tcq_13Jnl-CE9qpu0VcO6ZtR9Q"
 
     const val AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
     const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
@@ -31,6 +30,7 @@ object AppConfig {
     // ~6 Mbps 1080p; used until real chunk data is available
     const val ESTIMATED_VIDEO_BYTES_PER_SEC = 750_000.0
 
-    /** Linked from alert emails. Live once the app is listed on Google Play. */
-    const val APP_DOWNLOAD_URL = "https://play.google.com/store/apps/details?id=fyi.justfreesoftware.justcapture"
+    /** Linked from Settings and notification emails. */
+    const val HOMEPAGE_URL = "https://justfreesoftware.fyi/just-capture/info"
+    const val PRIVACY_POLICY_URL = "https://justfreesoftware.fyi/just-capture/privacy-policy"
 }

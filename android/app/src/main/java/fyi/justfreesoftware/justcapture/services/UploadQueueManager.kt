@@ -49,7 +49,7 @@ class UploadQueueManager(
 
     /**
      * Set when the signed-in account can't share folders publicly (usually a
-     * Workspace admin policy), so alert-email links won't open for
+     * Workspace admin policy), so email links won't open for
      * recipients. Observed by the UI to warn the user ahead of time.
      */
     val publicSharingBlocked: StateFlow<Boolean> = _publicSharingBlocked.asStateFlow()
@@ -72,8 +72,8 @@ class UploadQueueManager(
     /** One in-flight sharing request per session. */
     private val shareTasks = mutableMapOf<String, Deferred<Unit>>()
 
-    /** Serializes each session's playlist writes so only one playlist file is ever created. */
-    private val playlistLocks = mutableMapOf<String, Mutex>()
+    /** Serializes each session's playlist and location writes so only one of each file is ever created. */
+    private val writeLocks = mutableMapOf<String, Mutex>()
 
     /**
      * Caps simultaneous file uploads. After an outage dozens of chunks may be
@@ -98,12 +98,24 @@ class UploadQueueManager(
             val token = authManager.validAccessToken()
             val (folderId, link) = GoogleDriveService.createFolder(session.folderName, token)
             sessionStore.update(sessionId) { it.copy(driveFolderId = folderId, driveFolderLink = link) }
-            shareFolder(sessionId)
+            if (sessionStore.session(sessionId)?.driveFolderShared == false) shareFolder(sessionId)
             // After sharing, so a follow-up link works when it's opened.
             onFolderCreated?.invoke(sessionId)
             folderId
         }.also { folderTasks[sessionId] = it }
         return task.await()
+    }
+
+    /**
+     * Marks the session's folder for link sharing because an email is about to
+     * link to it. Folders stay private until this is called. If the folder
+     * doesn't exist yet, it's shared when [ensureFolder] creates it.
+     */
+    suspend fun requestLinkSharing(sessionId: String) {
+        val session = sessionStore.session(sessionId) ?: return
+        if (session.driveFolderShared != null) return
+        sessionStore.update(sessionId) { it.copy(driveFolderShared = false) }
+        if (session.driveFolderId != null) scope.launch { shareFolder(sessionId) }
     }
 
     /**
@@ -297,31 +309,85 @@ class UploadQueueManager(
                 }
             }
         }
+        // Clips may all be up already, leaving nothing else to retry this.
+        for (session in sessionStore.sessions.value) {
+            if (session.locationText != session.uploadedLocationText) {
+                scope.launch { updateLocationFile(session.id) }
+            }
+        }
     }
 
     /**
      * Rewrites the session's playlist on Drive. Calls for the same session
-     * run one after another so only one playlist file is ever created.
+     * run one after another so only one playlist file is ever created. Also
+     * retries the location file, so a failed upload of it is picked up the
+     * next time any clip finishes uploading.
      */
     suspend fun updatePlaylist(sessionId: String) {
-        val lock = playlistLocks.getOrPut(sessionId) { Mutex() }
-        lock.withLock {
-            try {
-                val session = sessionStore.session(sessionId) ?: return
-                val folderId = session.driveFolderId ?: return
-                val token = authManager.validAccessToken()
-                val fileId = GoogleDriveService.uploadOrUpdatePlaylist(
-                    content = playlistContent(session),
-                    folderId = folderId,
-                    existingFileId = session.playlistFileId,
-                    accessToken = token
-                )
-                sessionStore.update(sessionId) { it.copy(playlistFileId = fileId) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to update playlist: ${e.message}")
-            }
+        lockFor(sessionId).withLock {
+            writePlaylist(sessionId)
+            writeLocationFile(sessionId)
+        }
+    }
+
+    /**
+     * Uploads the session's location as soon as it's known, without waiting
+     * for the first clip, in case the phone is lost before that clip uploads.
+     */
+    suspend fun updateLocationFile(sessionId: String) {
+        try {
+            ensureFolder(sessionId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Picked up again after the next clip uploads, or at next launch.
+            Log.w(TAG, "No Drive folder for location file yet: ${e.message}")
+            return
+        }
+        lockFor(sessionId).withLock { writeLocationFile(sessionId) }
+    }
+
+    private fun lockFor(sessionId: String) = writeLocks.getOrPut(sessionId) { Mutex() }
+
+    private suspend fun writePlaylist(sessionId: String) {
+        try {
+            val session = sessionStore.session(sessionId) ?: return
+            val folderId = session.driveFolderId ?: return
+            val token = authManager.validAccessToken()
+            val fileId = GoogleDriveService.uploadOrUpdatePlaylist(
+                content = playlistContent(session),
+                folderId = folderId,
+                existingFileId = session.playlistFileId,
+                accessToken = token
+            )
+            sessionStore.update(sessionId) { it.copy(playlistFileId = fileId) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update playlist: ${e.message}")
+        }
+    }
+
+    private suspend fun writeLocationFile(sessionId: String) {
+        try {
+            val session = sessionStore.session(sessionId) ?: return
+            val content = session.locationText ?: return
+            if (content == session.uploadedLocationText) return
+            val folderId = session.driveFolderId ?: return
+            val token = authManager.validAccessToken()
+            val fileId = GoogleDriveService.uploadOrUpdateTextFile(
+                name = "location.txt",
+                mimeType = "text/plain",
+                content = content,
+                folderId = folderId,
+                existingFileId = session.locationFileId,
+                accessToken = token
+            )
+            sessionStore.update(sessionId) { it.copy(locationFileId = fileId, uploadedLocationText = content) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to upload location: ${e.message}")
         }
     }
 

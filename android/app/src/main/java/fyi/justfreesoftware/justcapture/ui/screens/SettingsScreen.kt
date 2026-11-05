@@ -1,8 +1,5 @@
 package fyi.justfreesoftware.justcapture.ui.screens
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -41,7 +38,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -50,15 +46,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
+import fyi.justfreesoftware.justcapture.config.AppConfig
 import fyi.justfreesoftware.justcapture.config.EmailSettings
 import fyi.justfreesoftware.justcapture.services.DriveStorageManager.StorageState
 import fyi.justfreesoftware.justcapture.services.GmailService
@@ -66,11 +62,8 @@ import fyi.justfreesoftware.justcapture.ui.theme.AppColors
 import fyi.justfreesoftware.justcapture.ui.theme.card
 import fyi.justfreesoftware.justcapture.util.DeviceStorage
 import fyi.justfreesoftware.justcapture.util.Formatters
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.net.URL
 
 private sealed interface TestEmailState {
     data object Idle : TestEmailState
@@ -87,9 +80,7 @@ fun SettingsScreen(graph: AppGraph) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
-    val userName by graph.authManager.userName.collectAsState()
     val userEmail by graph.authManager.userEmail.collectAsState()
-    val userPhotoUrl by graph.authManager.userPhotoUrl.collectAsState()
     val publicSharingBlocked by graph.uploadQueueManager.publicSharingBlocked.collectAsState()
     val quota by graph.driveStorageManager.quota.collectAsState()
     val forcedOut by graph.driveStorageManager.forcedOutOfStorage.collectAsState()
@@ -107,8 +98,7 @@ fun SettingsScreen(graph: AppGraph) {
     } ?: false
 
     LaunchedEffect(Unit) {
-        val subject = settings.emailSubject
-        if (subject.isEmpty() || subject == EmailSettings.LEGACY_SUBJECT) {
+        if (EmailSettings.isDefaultSubject(settings.emailSubject)) {
             settings.emailSubject = EmailSettings.DEFAULT_SUBJECT
         }
         graph.driveStorageManager.refreshIfStale()
@@ -124,8 +114,8 @@ fun SettingsScreen(graph: AppGraph) {
                 val token = graph.authManager.validAccessToken()
                 GmailService.sendEmergencyEmail(
                     to = email.recipients,
-                    subject = "[Test] " + EmailSettings.personalize(email.subject, userName, userEmail),
-                    bodyNote = "This is a test from Just Capture. A real alert also includes a link to your live " +
+                    subject = "[Test] " + email.subject,
+                    bodyNote = "This is a test from Just Capture. A real notification also includes a link to your " +
                         "recording in Google Drive." + if (email.note.isEmpty()) "" else "\n\n${email.note}",
                     startedAtMs = if (email.includeTime) System.currentTimeMillis() else null,
                     address = null,
@@ -159,7 +149,7 @@ fun SettingsScreen(graph: AppGraph) {
                 footer = if (publicSharingBlocked) {
                     {
                         FooterWarning(
-                            "This account doesn't allow public links, so alert contacts won't be able to open your " +
+                            "This account doesn't allow public links, so the people you notify won't be able to open your " +
                                 "videos. This is usually a work or school account policy. Sign in with a personal " +
                                 "Google account instead."
                         )
@@ -167,9 +157,9 @@ fun SettingsScreen(graph: AppGraph) {
                 } else null
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    Avatar(userPhotoUrl, (userName ?: userEmail ?: "?").take(1).uppercase())
+                    Avatar((userEmail ?: "?").take(1).uppercase())
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(userName ?: "Google Account", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                        Text("Google Account", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                         userEmail?.let { Text(it, color = AppColors.secondaryText, fontSize = 12.sp) }
                     }
                 }
@@ -189,7 +179,11 @@ fun SettingsScreen(graph: AppGraph) {
             Section(
                 header = "Recording",
                 footer = {
-                    FooterText("Each clip uploads as soon as it ends. Shorter clips get footage off your phone sooner; longer clips use less data.")
+                    FooterText(
+                        "Each clip starts uploading as soon as it ends. Shorter clips get footage off your phone sooner; " +
+                            "longer clips use less data. Your location is saved when you start recording and at the end of " +
+                            "each clip, on this phone and in Google Drive. Where you started is added to notification emails."
+                    )
                 }
             ) {
                 Text("Clip length", color = Color.White, fontSize = 16.sp)
@@ -211,11 +205,12 @@ fun SettingsScreen(graph: AppGraph) {
                         ) { Text(label) }
                     }
                 }
+                SwitchRow("Save location", settings.includeLocationInEmail) { settings.includeLocationInEmail = it }
             }
 
-            // ---- Email alerts ----
+            // ---- Email notifications ----
             Section(
-                header = "Email Alerts",
+                header = "Email Notifications",
                 footer = {
                     when {
                         !settings.emailAlertsEnabled -> FooterText("No one will be notified when you start recording.")
@@ -235,7 +230,7 @@ fun SettingsScreen(graph: AppGraph) {
                     }
                 }
             ) {
-                SwitchRow("Email alerts", settings.emailAlertsEnabled) { settings.emailAlertsEnabled = it }
+                SwitchRow("Email notifications", settings.emailAlertsEnabled) { settings.emailAlertsEnabled = it }
                 if (settings.emailAlertsEnabled) {
                     OutlinedTextField(
                         value = settings.emailRecipients,
@@ -273,8 +268,7 @@ fun SettingsScreen(graph: AppGraph) {
                     header = "Email Content",
                     footer = {
                         FooterText(
-                            "${EmailSettings.NAME_TOKEN} in the subject is replaced with your name. A second email is " +
-                                "sent if your Google Drive runs out of space mid-recording."
+                            "A second email is sent if your Google Drive runs out of space mid-recording."
                         )
                     }
                 ) {
@@ -295,7 +289,6 @@ fun SettingsScreen(graph: AppGraph) {
                         modifier = Modifier.fillMaxWidth()
                     )
                     SwitchRow("Include start time", settings.includeTimeInEmail) { settings.includeTimeInEmail = it }
-                    SwitchRow("Include location", settings.includeLocationInEmail) { settings.includeLocationInEmail = it }
                 }
             }
 
@@ -371,12 +364,16 @@ fun SettingsScreen(graph: AppGraph) {
             // ---- About ----
             Section(
                 header = "About",
-                footer = { FooterText("Just Capture records continuously and backs every clip up to your Google Drive as it goes.") }
+                footer = { FooterText("Just Capture records in short clips and tries to upload each one to your Google Drive as it goes.") }
             ) {
                 Row {
                     Text("Version", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
                     Text(appVersion(context), color = AppColors.secondaryText, fontSize = 16.sp)
                 }
+                Divider()
+                LinkRow("Website", AppConfig.HOMEPAGE_URL)
+                Divider()
+                LinkRow("Privacy Policy", AppConfig.PRIVACY_POLICY_URL)
             }
         }
     }
@@ -385,7 +382,7 @@ fun SettingsScreen(graph: AppGraph) {
         AlertDialog(
             onDismissRequest = { showSignOutConfirm = false },
             title = { Text("Sign out of Google?") },
-            text = { Text("Recording stops, and uploads and alert emails pause until you sign back in.") },
+            text = { Text("Recording stops, and uploads and notification emails pause until you sign back in.") },
             confirmButton = {
                 TextButton(onClick = {
                     showSignOutConfirm = false
@@ -457,16 +454,23 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
     }
 }
 
-/** The signed-in user's Google photo, or their initial on the brand gradient. */
 @Composable
-private fun Avatar(photoUrl: String?, initial: String) {
-    val bitmap by produceState<Bitmap?>(null, photoUrl) {
-        value = photoUrl?.let { url ->
-            withContext(Dispatchers.IO) {
-                runCatching { URL(url).openStream().use { BitmapFactory.decodeStream(it) } }.getOrNull()
-            }
-        }
-    }
+private fun LinkRow(label: String, url: String) {
+    val uriHandler = LocalUriHandler.current
+    Text(
+        label,
+        color = AppColors.accent,
+        fontSize = 16.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { runCatching { uriHandler.openUri(url) } }
+            .padding(vertical = 4.dp)
+    )
+}
+
+/** The signed-in user's initial on the brand gradient. */
+@Composable
+private fun Avatar(initial: String) {
     Box(
         modifier = Modifier
             .size(44.dp)
@@ -474,11 +478,6 @@ private fun Avatar(photoUrl: String?, initial: String) {
             .background(AppColors.brandGradient),
         contentAlignment = Alignment.Center
     ) {
-        val image = bitmap
-        if (image != null) {
-            Image(image.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        } else {
-            Text(initial, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
-        }
+        Text(initial, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp)
     }
 }
