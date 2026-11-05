@@ -38,9 +38,7 @@ class GoogleAuthManager(
 ) {
     val isSignedIn = MutableStateFlow(false)
     val isAuthenticating = MutableStateFlow(false)
-    val userName = MutableStateFlow<String?>(null)
     val userEmail = MutableStateFlow<String?>(null)
-    val userPhotoUrl = MutableStateFlow<String?>(null)
 
     /** Shown to the user when sign-in fails for a reason other than cancelling. */
     val signInError = MutableStateFlow<String?>(null)
@@ -242,7 +240,7 @@ class GoogleAuthManager(
             .putLong(KEY_TOKEN_EXPIRY, System.currentTimeMillis() + expiresInMs)
             .apply()
 
-        if (userName.value == null || userEmail.value == null) {
+        if (userEmail.value == null) {
             try {
                 fetchUserInfo(accessToken)
             } catch (e: Exception) {
@@ -256,9 +254,7 @@ class GoogleAuthManager(
     fun signOut() {
         clearTokens()
         isSignedIn.value = false
-        userName.value = null
         userEmail.value = null
-        userPhotoUrl.value = null
     }
 
     private fun clearTokens() {
@@ -274,8 +270,6 @@ class GoogleAuthManager(
 
         val (_, userJson) = executeJson(request)
         userEmail.value = userJson["email"]?.jsonPrimitive?.content
-        userName.value = userJson["name"]?.jsonPrimitive?.content
-        userPhotoUrl.value = userJson["picture"]?.jsonPrimitive?.content
     }
 
     private suspend fun executeJson(request: Request): Pair<Int, kotlinx.serialization.json.JsonObject> {

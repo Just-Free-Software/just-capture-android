@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -86,6 +87,7 @@ import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
 import fyi.justfreesoftware.justcapture.model.EmailJob
 import fyi.justfreesoftware.justcapture.model.EmailStatus
+import fyi.justfreesoftware.justcapture.model.LocationPoint
 import fyi.justfreesoftware.justcapture.model.RecordingSession
 import fyi.justfreesoftware.justcapture.model.UploadStatus
 import fyi.justfreesoftware.justcapture.model.VideoChunk
@@ -136,7 +138,7 @@ fun MyClipsScreen(graph: AppGraph) {
             EmptyState(
                 icon = Icons.Filled.Videocam,
                 title = "No Recordings Yet",
-                message = "Sessions you record show up here, with their upload and alert status."
+                message = "Sessions you record show up here, with their upload and notification status."
             )
         } else {
             LazyColumn(
@@ -313,7 +315,7 @@ private fun SessionDetailScreen(graph: AppGraph, session: RecordingSession, onBa
             item(span = { GridItemSpan(maxLineSpan) }) {
                 OverviewCard(
                     session = session,
-                    onOpenDrive = { link ->
+                    onOpenLink = { link ->
                         runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(link))) }
                     },
                     onPlay = { playingFromDrive = true },
@@ -377,7 +379,7 @@ private fun SessionDetailScreen(graph: AppGraph, session: RecordingSession, onBa
 @Composable
 private fun OverviewCard(
     session: RecordingSession,
-    onOpenDrive: (String) -> Unit,
+    onOpenLink: (String) -> Unit,
     onPlay: () -> Unit,
     onRetryFailed: () -> Unit
 ) {
@@ -416,10 +418,29 @@ private fun OverviewCard(
             )
         }
 
+        val latitude = session.latitude
+        val longitude = session.longitude
+        if (latitude != null && longitude != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenLink(LocationPoint.mapUrl(latitude, longitude)) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(Icons.Filled.LocationOn, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(18.dp))
+                Text(
+                    session.locationAddress ?: LocationPoint.coordinates(latitude, longitude),
+                    color = AppColors.accent,
+                    fontSize = 14.sp
+                )
+            }
+        }
+
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             session.driveFolderLink?.let { link ->
                 Button(
-                    onClick = { onOpenDrive(link) },
+                    onClick = { onOpenLink(link) },
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Filled.Folder, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -450,7 +471,7 @@ private fun EmailOutboxCard(jobs: List<EmailJob>, onRetry: (EmailJob) -> Unit) {
     Column(modifier = Modifier.card(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Filled.Email, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-            Text("Alert emails", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            Text("Notification emails", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
         }
         jobs.forEach { job -> EmailJobRow(job, onRetry = { onRetry(job) }) }
     }

@@ -156,12 +156,10 @@ fun RecordingScreen(graph: AppGraph) {
     }
 
     LaunchedEffect(Unit) {
-        val needed = listOf(
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        ).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
+        val locationPermissions = if (settings.includeLocationInEmail) {
+            listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        } else emptyList()
+        val needed = (listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO) + locationPermissions).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) permissionLauncher.launch(needed.toTypedArray())
         else location.permissionAsked = true
     }
@@ -281,6 +279,7 @@ fun RecordingScreen(graph: AppGraph) {
                     driveState = driveState,
                     driveAvailable = quota?.availableBytes,
                     deviceLow = isDeviceStorageLow,
+                    savesLocation = settings.includeLocationInEmail,
                     locationOn = location.permissionGranted
                 )
             }
@@ -299,7 +298,7 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.ERROR,
                         icon = Icons.Filled.VideocamOff,
                         title = "Recording stopped",
-                        message = "$error Clips recorded so far are saved and still uploading.",
+                        message = "$error Clips recorded so far are saved on this phone, and the app will keep trying to upload them.",
                         onDismiss = { camera.recordingError = null }
                     )
                 }
@@ -308,7 +307,7 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.WARNING,
                         icon = Icons.Filled.CloudOff,
                         title = "Google Drive is full",
-                        message = "Clips are kept on this phone and will upload automatically once you free up space."
+                        message = "Clips are kept on this phone, and the app will try uploading them again once you free up space."
                     )
                 }
                 val free = deviceFreeBytes
@@ -329,16 +328,16 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.WARNING,
                         icon = Icons.Filled.LinkOff,
                         title = "Contacts can't open your videos",
-                        message = "Your Google account (likely work or school) doesn't allow public links, so alert " +
+                        message = "Your Google account (likely work or school) doesn't allow public links, so notification " +
                             "emails will link to a private folder. Sign in with a personal Google account to fix this."
                     )
                 }
-                if (!camera.isRecording && !location.permissionGranted && location.permissionAsked) {
+                if (!camera.isRecording && settings.includeLocationInEmail && !location.permissionGranted && location.permissionAsked) {
                     NoticeBanner(
                         style = NoticeStyle.INFO,
                         icon = Icons.Filled.LocationOff,
                         title = "Location is off",
-                        message = "Alert emails won't include where you are.",
+                        message = "Recordings and notification emails won't include where you are.",
                         actionTitle = "Turn On in Settings",
                         onAction = { openAppSettings(context) }
                     )
@@ -401,6 +400,7 @@ private fun ReadinessPills(
     driveState: StorageState,
     driveAvailable: Long?,
     deviceLow: Boolean,
+    savesLocation: Boolean,
     locationOn: Boolean
 ) {
     Row(
@@ -425,7 +425,10 @@ private fun ReadinessPills(
             driveColor
         )
         if (deviceLow) ReadinessPill(Icons.Filled.PhoneAndroid, "Phone low", AppColors.warning)
-        if (locationOn) {
+        if (!savesLocation) {
+            // The user's choice, so not shown as a problem.
+            ReadinessPill(Icons.Filled.LocationOff, "No location", Color.White)
+        } else if (locationOn) {
             ReadinessPill(Icons.Filled.LocationOn, "Location", Color.White)
         } else {
             ReadinessPill(Icons.Filled.LocationOff, "No location", AppColors.record)
@@ -527,7 +530,7 @@ private fun BottomControls(
                 icon = Icons.AutoMirrored.Filled.Send,
                 tint = if (camera.isRecording) AppColors.accent else Color.White,
                 label = if (camera.isRecording) {
-                    "Send clip now. Ends clip ${camera.currentChunkIndex + 1} early and uploads it"
+                    "Send clip now. Ends clip ${camera.currentChunkIndex + 1} early and starts uploading it"
                 } else "Send clip now, available while recording",
                 enabled = camera.isRecording,
                 onClick = camera::cutChunkNow
@@ -536,7 +539,7 @@ private fun BottomControls(
             // the send button. Hidden while recording to keep the view clear.
             if (!camera.isRecording) {
                 Text(
-                    "Recording in ${settings.chunkDurationSec.toInt()}s clips",
+                    "Recording in ${settings.chunkDurationSec.toInt()}-second clips",
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
@@ -609,7 +612,7 @@ private fun SendClipTip(
                 )
             }
             Text(
-                "While recording, tap this to end the current clip early and upload it right away, instead of " +
+                "While recording, tap this to end the current clip early and start uploading it right away, instead of " +
                     "waiting for the $chunkSeconds-second clip to finish.",
                 color = AppColors.secondaryText,
                 fontSize = 12.sp
@@ -656,14 +659,14 @@ private fun SendClipTip(
 @Composable
 private fun EmailStatusLine(job: EmailJob) {
     val (text, icon, color) = when (job.status) {
-        EmailStatus.SENT -> Triple("Alert sent to ${job.recipients.size}", Icons.Filled.CheckCircle, AppColors.success)
-        EmailStatus.SENDING -> Triple("Sending alert…", Icons.AutoMirrored.Filled.Send, Color.White)
+        EmailStatus.SENT -> Triple("Notification sent to ${job.recipients.size}", Icons.Filled.CheckCircle, AppColors.success)
+        EmailStatus.SENDING -> Triple("Sending notification…", Icons.AutoMirrored.Filled.Send, Color.White)
         EmailStatus.PENDING -> Triple(
-            if (job.attempts == 0) "Alert queued" else "Alert retrying (no connection?)",
+            if (job.attempts == 0) "Notification queued" else "Notification retrying (no connection?)",
             Icons.Filled.Schedule,
             AppColors.warning
         )
-        EmailStatus.FAILED -> Triple("Alert failed — retry from My Clips", Icons.Filled.Warning, AppColors.record)
+        EmailStatus.FAILED -> Triple("Notification failed — retry from My Clips", Icons.Filled.Warning, AppColors.record)
     }
     Row(
         modifier = Modifier.overlayPill(),

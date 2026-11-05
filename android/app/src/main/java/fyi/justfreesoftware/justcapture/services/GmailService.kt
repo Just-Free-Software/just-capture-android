@@ -144,7 +144,7 @@ object GmailService {
         html = html.replace(
             "{{APP_LINK_SECTION}}",
             "<p style=\"color: #888888; font-size: 12px;\">For a better viewing experience, " +
-                "<a href=\"${escapeHtml(AppConfig.APP_DOWNLOAD_URL)}\">download Just Capture</a>.</p>"
+                "<a href=\"${escapeHtml(AppConfig.HOMEPAGE_URL)}\">download Just Capture</a>.</p>"
         )
         return html
     }
