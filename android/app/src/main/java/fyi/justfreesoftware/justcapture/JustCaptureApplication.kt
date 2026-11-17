@@ -8,30 +8,37 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import fyi.justfreesoftware.justcapture.config.EmailSettings
 import fyi.justfreesoftware.justcapture.data.SessionStore
+import fyi.justfreesoftware.justcapture.data.Settings
 import fyi.justfreesoftware.justcapture.model.LocationPoint
 import fyi.justfreesoftware.justcapture.model.RecordingSession
-import fyi.justfreesoftware.justcapture.data.Settings
+import fyi.justfreesoftware.justcapture.services.BackgroundSyncWorker
 import fyi.justfreesoftware.justcapture.services.CameraManager
+import fyi.justfreesoftware.justcapture.services.ClipRecovery
 import fyi.justfreesoftware.justcapture.services.DriveStorageManager
 import fyi.justfreesoftware.justcapture.services.EmailQueueManager
 import fyi.justfreesoftware.justcapture.services.GmailService
 import fyi.justfreesoftware.justcapture.services.GoogleAuthManager
 import fyi.justfreesoftware.justcapture.services.GoogleDriveService
 import fyi.justfreesoftware.justcapture.services.LocationManager
+import fyi.justfreesoftware.justcapture.services.NetworkMonitor
 import fyi.justfreesoftware.justcapture.services.SharedFolderStore
 import fyi.justfreesoftware.justcapture.services.UploadQueueManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 
 /**
  * Dependency graph for the app, mirroring the iOS app's environment objects.
  * Built once in [JustCaptureApplication.onCreate]; lives for the process, so
- * uploads and email retries keep running while the process is alive.
+ * uploads and email retries keep running while the process is alive. When
+ * the app is left with work unfinished, [BackgroundSyncWorker] brings the
+ * process back to carry on.
  */
 class AppGraph(context: Context, val appScope: CoroutineScope) {
     val settings = Settings(context)
@@ -40,11 +47,26 @@ class AppGraph(context: Context, val appScope: CoroutineScope) {
     val cameraManager = CameraManager(context, appScope)
     val locationManager = LocationManager(context, appScope) { settings.includeLocationInEmail }
     val driveStorageManager = DriveStorageManager(sessionStore, authManager, appScope)
-    val emailQueueManager = EmailQueueManager(context, sessionStore, authManager, locationManager, appScope)
-    val uploadQueueManager = UploadQueueManager(sessionStore, authManager, appScope)
+    val networkMonitor = NetworkMonitor(context, appScope)
+    val emailQueueManager =
+        EmailQueueManager(context, sessionStore, authManager, locationManager, networkMonitor, appScope)
+    val uploadQueueManager = UploadQueueManager(sessionStore, authManager, networkMonitor, appScope)
     val sharedFolderStore = SharedFolderStore(context)
 
     private var storageEmailSentForSessionId: String? = null
+    private var lastFailedRetryMs: Long? = null
+
+    /** Completed once interrupted clips are recovered; nothing uploads before that. */
+    private val started = CompletableDeferred<Unit>()
+
+    /** Uploads or emails are running or waiting to retry. */
+    val hasActiveWork: Boolean
+        get() = uploadQueueManager.hasActiveWork || emailQueueManager.hasActiveWork
+
+    /** Clips or emails are unfinished. Signed out, there's nothing the app could do about them. */
+    val hasOutstandingWork: Boolean
+        get() = authManager.isSignedIn.value &&
+            (uploadQueueManager.hasUnfinishedClips || emailQueueManager.hasOutstandingWork)
 
     init {
         uploadQueueManager.onFolderCreated = { sessionId -> emailQueueManager.sendLinkFollowUps(sessionId) }
@@ -55,8 +77,7 @@ class AppGraph(context: Context, val appScope: CoroutineScope) {
                 if (signedIn) {
                     // Drain anything left over from a previous launch or a
                     // previous sign-in: pending chunk uploads and unsent emails.
-                    uploadQueueManager.resumePendingUploads()
-                    emailQueueManager.resumeAll()
+                    sweep()
                     launch { uploadQueueManager.checkPublicSharing() }
                 } else {
                     // Signing out hides the camera; don't keep recording unseen.
@@ -74,16 +95,21 @@ class AppGraph(context: Context, val appScope: CoroutineScope) {
             uploadQueueManager.storageExceeded.collect { exceeded ->
                 if (!exceeded) return@collect
                 driveStorageManager.markOutOfStorage()
-                val session = sessionStore.currentSession ?: return@collect
-                if (session.isActive && storageEmailSentForSessionId != session.id) {
-                    storageEmailSentForSessionId = session.id
-                    val email = EmailSettings.from(settings)
-                    if (email.canSend) {
-                        enqueueEmail(session.id, "Storage Full: ${email.subject}", EmailSettings.STORAGE_FULL_NOTE, email)
-                    }
-                }
+                sendStorageEmailOnce(EmailSettings.STORAGE_FULL_NOTE)
             }
         }
+
+        // Gmail shares the account's storage with Drive, so a full account may
+        // not be able to send at all. This warning goes out while it still can.
+        appScope.launch {
+            combine(driveStorageManager.quota, driveStorageManager.forcedOutOfStorage) { quota, forcedOut ->
+                DriveStorageManager.shouldSendLowStorageEmail(quota, forcedOut)
+            }.distinctUntilChanged().collect { shouldSend ->
+                if (shouldSend) sendStorageEmailOnce(EmailSettings.STORAGE_LOW_NOTE)
+            }
+        }
+
+        networkMonitor.onRestored = { sweep() }
 
         // Single place that finalizes a session, whichever path stopped
         // recording (stop button, backgrounding, sign-out, camera failure).
@@ -98,6 +124,52 @@ class AppGraph(context: Context, val appScope: CoroutineScope) {
                     }
                 }
         }
+    }
+
+    /** Call once the graph is built. Recovers clips, then restores sign-in, which starts the first sweep. */
+    fun start() {
+        appScope.launch {
+            ClipRecovery.recoverInterruptedClips(sessionStore)
+            started.complete(Unit)
+            authManager.restoreSignIn()
+        }
+    }
+
+    suspend fun awaitStarted() = started.await()
+
+    /**
+     * Restarts whatever isn't running. Safe to call often: it does nothing
+     * for clips and emails already in progress, and tries that have failed
+     * are only restarted once per [FAILED_RETRY_INTERVAL_MS].
+     */
+    fun sweep() {
+        if (!started.isCompleted || !authManager.isSignedIn.value) return
+        val now = System.currentTimeMillis()
+        val retryFailed = lastFailedRetryMs?.let { now - it >= FAILED_RETRY_INTERVAL_MS } ?: true
+        if (retryFailed) lastFailedRetryMs = now
+        appScope.launch {
+            uploadQueueManager.resumePendingUploads(retryFailed)
+            emailQueueManager.resumeAll(retryFailed)
+            // An email is waiting on a link, with no clip to create the folder.
+            emailQueueManager.jobs.value.filter { it.needsLinkFollowUp }.map { it.sessionId }.toSet()
+                .forEach { uploadQueueManager.prepareFolder(it) }
+        }
+    }
+
+    /** At most one storage email per recording, low or full. */
+    internal suspend fun sendStorageEmailOnce(note: String) {
+        val session = sessionStore.currentSession ?: return
+        if (!session.isActive || storageEmailSentForSessionId == session.id) return
+        storageEmailSentForSessionId = session.id
+        val email = EmailSettings.from(settings)
+        if (email.canSend) {
+            enqueueEmail(session.id, EmailSettings.storageSubject(authManager.userEmail.value), note, email)
+        }
+    }
+
+    private companion object {
+        /** Failed work gets a fresh set of tries at most this often, however many things ask. */
+        const val FAILED_RETRY_INTERVAL_MS = 60_000L
     }
 }
 
@@ -146,6 +218,10 @@ fun AppGraph.startRecording(): Boolean {
         // automatically if the connection is poor.
         val email = EmailSettings.from(settings)
         if (email.canSend) enqueueEmail(session.id, email.subject, email.note, email)
+        // Already low, so nothing will change and trigger the warning.
+        if (driveStorageManager.shouldSendLowStorageEmail()) {
+            sendStorageEmailOnce(EmailSettings.STORAGE_LOW_NOTE)
+        }
         // Create the Drive folder right away so its link is ready for the
         // email and the playlist can be built.
         uploadQueueManager.prepareFolder(session.id)
@@ -198,7 +274,6 @@ private suspend fun AppGraph.enqueueEmail(sessionId: String, subject: String, no
         recipients = settings.recipients,
         subject = subject,
         bodyNote = note,
-        includeTime = settings.includeTime,
         includeLocation = settings.includeLocation
     )
 }
@@ -216,12 +291,15 @@ class JustCaptureApplication : Application() {
         GmailService.init(this)
         graph = AppGraph(this, appScope)
 
-        appScope.launch { graph.authManager.restoreSignIn() }
+        graph.start()
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
                 graph.authManager.onAppResumed()
                 graph.locationManager.refreshPermission()
+                // Back on screen: retries now, rather than leaving failed
+                // work until the next launch.
+                graph.sweep()
             }
 
             // When the user switches away, the camera is released, so any
@@ -229,6 +307,9 @@ class JustCaptureApplication : Application() {
             // isRecording observer above finalizes the session.
             override fun onStop(owner: LifecycleOwner) {
                 graph.cameraManager.stopRecording()
+                // The last clip is still being finished, so this can't wait
+                // to see whether there's anything left to upload.
+                if (graph.authManager.isSignedIn.value) BackgroundSyncWorker.schedule(this@JustCaptureApplication)
             }
         })
     }

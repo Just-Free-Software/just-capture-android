@@ -30,6 +30,17 @@ object Formatters {
      */
     fun storageBytes(bytes: Long): String = scaled(bytes, 1024.0)
 
+    /** Free space as a short "12 GB" or "3.4 GB", for where there's little room. */
+    fun shortGigabytes(bytes: Long): String {
+        val gb = bytes / BYTES_PER_GIB
+        return if (gb >= WHOLE_GIGABYTES_FROM) "${gb.toInt()} GB" else String.format(Locale.getDefault(), "%.1f GB", gb)
+    }
+
+    private const val BYTES_PER_GIB = 1024.0 * 1024 * 1024
+
+    /** Below this, a decimal place is worth its width: "3.4 GB" but "12 GB". */
+    private const val WHOLE_GIGABYTES_FROM = 10
+
     private fun scaled(bytes: Long, unit: Double): String {
         if (bytes < unit) return "$bytes bytes"
         val units = listOf("KB", "MB", "GB", "TB")
@@ -60,8 +71,7 @@ object Formatters {
     fun sessionDateLong(epochMs: Long): String =
         SimpleDateFormat("MMM d, yyyy, h:mm a", Locale.getDefault()).format(Date(epochMs))
 
-    fun time(epochMs: Long): String =
-        SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(epochMs))
+    fun time(epochMs: Long): String = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(epochMs))
 
     fun emailTimestamp(epochMs: Long): String =
         SimpleDateFormat("MMM d, yyyy 'at' h:mm a zzz", Locale.US).format(Date(epochMs))

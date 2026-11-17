@@ -97,17 +97,17 @@ import fyi.justfreesoftware.justcapture.ui.components.icon
 import fyi.justfreesoftware.justcapture.ui.components.label
 import fyi.justfreesoftware.justcapture.ui.components.statusSummary
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
-import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.CardShape
 import fyi.justfreesoftware.justcapture.ui.theme.SectionHeader
 import fyi.justfreesoftware.justcapture.ui.theme.StatView
 import fyi.justfreesoftware.justcapture.ui.theme.StatusBadge
+import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.card
 import fyi.justfreesoftware.justcapture.util.Formatters
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 @Composable
 fun MyClipsScreen(graph: AppGraph) {
@@ -185,7 +185,12 @@ fun EmptyState(icon: ImageVector, title: String, message: String) {
     ) {
         Icon(icon, contentDescription = null, tint = AppColors.tertiaryText, modifier = Modifier.size(56.dp))
         Text(title, color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text(message, color = AppColors.secondaryText, fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        Text(
+            message,
+            color = AppColors.secondaryText,
+            fontSize = 14.sp,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+        )
     }
 }
 
@@ -196,8 +201,30 @@ private fun Summary(sessions: List<RecordingSession>) {
     val totalFailed = sessions.sumOf { it.failedCount }
     Row(modifier = Modifier.card(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         StatView("Recorded", Formatters.duration(totalDuration), Color.White, Modifier.weight(1f))
-        StatView("Uploading", "$totalQueued", if (totalQueued > 0) AppColors.accent else AppColors.secondaryText, Modifier.weight(1f))
-        StatView("Failed", "$totalFailed", if (totalFailed > 0) AppColors.warning else AppColors.secondaryText, Modifier.weight(1f))
+        StatView(
+            "Uploading",
+            "$totalQueued",
+            if (totalQueued >
+                0
+            ) {
+                AppColors.accent
+            } else {
+                AppColors.secondaryText
+            },
+            Modifier.weight(1f)
+        )
+        StatView(
+            "Failed",
+            "$totalFailed",
+            if (totalFailed >
+                0
+            ) {
+                AppColors.warning
+            } else {
+                AppColors.secondaryText
+            },
+            Modifier.weight(1f)
+        )
     }
 }
 
@@ -226,7 +253,10 @@ private fun SessionRow(session: RecordingSession, onClick: () -> Unit, onLongCli
                 modifier = Modifier.size(20.dp)
             )
         }
+        // The badge sits above the text rather than beside it: as a third
+        // column it left the text little width with a large font size.
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            StatusBadge(status.text, status.icon, status.color)
             Text(
                 Formatters.sessionDate(session.startEpochMs),
                 color = Color.White,
@@ -236,7 +266,11 @@ private fun SessionRow(session: RecordingSession, onClick: () -> Unit, onLongCli
             )
             val clips = "${session.totalCount} clip${if (session.totalCount == 1) "" else "s"}"
             Text(
-                listOf(Formatters.duration(session.totalDurationSec), clips, Formatters.bytes(session.totalBytes)).joinToString(" · "),
+                listOf(
+                    Formatters.duration(session.totalDurationSec),
+                    clips,
+                    Formatters.bytes(session.totalBytes)
+                ).joinToString(" · "),
                 color = AppColors.secondaryText,
                 fontSize = 12.sp
             )
@@ -251,7 +285,6 @@ private fun SessionRow(session: RecordingSession, onClick: () -> Unit, onLongCli
                 )
             }
         }
-        StatusBadge(status.text, status.icon, status.color)
     }
 }
 
@@ -295,7 +328,9 @@ private fun SessionDetailScreen(graph: AppGraph, session: RecordingSession, onBa
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("Delete Session", color = AppColors.record) },
-                            leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = AppColors.record) },
+                            leadingIcon = {
+                                Icon(Icons.Filled.Delete, contentDescription = null, tint = AppColors.record)
+                            },
                             onClick = {
                                 menuOpen = false
                                 confirmDelete = true
@@ -331,12 +366,22 @@ private fun SessionDetailScreen(graph: AppGraph, session: RecordingSession, onBa
                 }
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Text("Clips", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
+                Text(
+                    "Clips",
+                    color = Color.White,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
             }
             if (session.chunks.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
-                        if (session.isActive) "The first clip will appear here in a few seconds." else "No clips were recorded.",
+                        if (session.isActive) {
+                            "The first clip will appear here in a few seconds."
+                        } else {
+                            "No clips were recorded."
+                        },
                         color = AppColors.secondaryText,
                         fontSize = 14.sp,
                         modifier = Modifier.card()
@@ -363,6 +408,10 @@ private fun SessionDetailScreen(graph: AppGraph, session: RecordingSession, onBa
                 folderId = folderId,
                 source = DriveSessionDownloader.Source.OWN_DRIVE,
                 title = title,
+                localClips = session.chunks.map {
+                    DriveSessionDownloader.LocalClip(it.driveFileId, File(it.localPath), it.fileSizeBytes)
+                },
+                locationText = session.locationText,
                 onDismiss = { playingFromDrive = false }
             )
         }
@@ -405,8 +454,30 @@ private fun OverviewCard(
 
         Row {
             StatView("Uploaded", "${session.uploadedCount}", AppColors.success, Modifier.weight(1f))
-            StatView("Queued", "${session.queuedCount}", if (session.queuedCount > 0) AppColors.accent else AppColors.secondaryText, Modifier.weight(1f))
-            StatView("Failed", "${session.failedCount}", if (session.failedCount > 0) AppColors.record else AppColors.secondaryText, Modifier.weight(1f))
+            StatView(
+                "Queued",
+                "${session.queuedCount}",
+                if (session.queuedCount >
+                    0
+                ) {
+                    AppColors.accent
+                } else {
+                    AppColors.secondaryText
+                },
+                Modifier.weight(1f)
+            )
+            StatView(
+                "Failed",
+                "${session.failedCount}",
+                if (session.failedCount >
+                    0
+                ) {
+                    AppColors.record
+                } else {
+                    AppColors.secondaryText
+                },
+                Modifier.weight(1f)
+            )
         }
 
         if (session.totalCount > 0) {
@@ -428,7 +499,12 @@ private fun OverviewCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Filled.LocationOn, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(18.dp))
+                Icon(
+                    Icons.Filled.LocationOn,
+                    contentDescription = null,
+                    tint = AppColors.accent,
+                    modifier = Modifier.size(18.dp)
+                )
                 Text(
                     session.locationAddress ?: LocationPoint.coordinates(latitude, longitude),
                     color = AppColors.accent,
@@ -450,14 +526,24 @@ private fun OverviewCard(
             }
             if (session.driveFolderId != null && session.uploadedCount > 0) {
                 OutlinedButton(onClick = onPlay, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.PlayArrow, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        tint = AppColors.accent,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(Modifier.size(6.dp))
                     Text("Play", color = AppColors.accent, maxLines = 1)
                 }
             }
             if (session.failedCount > 0) {
                 OutlinedButton(onClick = onRetryFailed, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Filled.Refresh, contentDescription = null, tint = AppColors.warning, modifier = Modifier.size(18.dp))
+                    Icon(
+                        Icons.Filled.Refresh,
+                        contentDescription = null,
+                        tint = AppColors.warning,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(Modifier.size(6.dp))
                     Text("Retry ${session.failedCount}", color = AppColors.warning, maxLines = 1)
                 }
@@ -485,14 +571,30 @@ private fun EmailJobRow(job: EmailJob, onRetry: () -> Unit) {
         } else {
             Triple("Retrying · attempt ${job.attempts}", Icons.Filled.History, AppColors.warning)
         }
+
         EmailStatus.SENDING -> Triple("Sending…", Icons.AutoMirrored.Filled.Send, AppColors.accent)
-        EmailStatus.SENT -> Triple("Sent ${job.lastAttemptEpochMs?.let { Formatters.time(it) } ?: ""}", Icons.Filled.CheckCircle, AppColors.success)
+
+        EmailStatus.SENT -> Triple(
+            "Sent ${job.lastAttemptEpochMs?.let {
+                Formatters.time(it)
+            } ?: ""}",
+            Icons.Filled.CheckCircle,
+            AppColors.success
+        )
+
         EmailStatus.FAILED -> Triple("Failed after ${job.attempts} attempts", Icons.Filled.Warning, AppColors.record)
     }
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(job.subject, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                job.subject,
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
             Text(
                 "$text · ${job.recipients.joinToString(", ")}",
                 color = AppColors.secondaryText,
@@ -520,13 +622,26 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
         modifier = Modifier
             .aspectRatio(9f / 16f)
             .clip(shape)
-            .border(1.dp, if (chunk.status == UploadStatus.FAILED) AppColors.record.copy(alpha = 0.7f) else AppColors.stroke, shape)
+            .border(
+                1.dp,
+                if (chunk.status ==
+                    UploadStatus.FAILED
+                ) {
+                    AppColors.record.copy(alpha = 0.7f)
+                } else {
+                    AppColors.stroke
+                },
+                shape
+            )
             .combinedClickable(
                 enabled = localFileExists || chunk.status == UploadStatus.FAILED,
                 onClick = { if (localFileExists) onPlay() else menuOpen = true },
                 onLongClick = { menuOpen = true }
             )
-            .semantics { contentDescription = "Clip ${chunk.index + 1}, ${Formatters.duration(chunk.durationSec)}, ${chunk.status.label}" }
+            .semantics {
+                contentDescription =
+                    "Clip ${chunk.index + 1}, ${Formatters.duration(chunk.durationSec)}, ${chunk.status.label}"
+            }
     ) {
         ChunkThumbnail(chunk.localPath, Modifier.fillMaxSize())
         Box(
@@ -557,7 +672,12 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
                 .background(AppColors.overlay, CircleShape)
                 .padding(5.dp)
         ) {
-            Icon(chunk.status.icon, contentDescription = null, tint = chunk.status.color, modifier = Modifier.size(14.dp))
+            Icon(
+                chunk.status.icon,
+                contentDescription = null,
+                tint = chunk.status.color,
+                modifier = Modifier.size(14.dp)
+            )
         }
         Column(
             modifier = Modifier
@@ -576,7 +696,12 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
                     modifier = Modifier.weight(1f)
                 )
                 if (!localFileExists) {
-                    Icon(Icons.Filled.Cloud, contentDescription = null, tint = Color.White, modifier = Modifier.size(12.dp))
+                    Icon(
+                        Icons.Filled.Cloud,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(12.dp)
+                    )
                 }
             }
             if (chunk.status == UploadStatus.UPLOADING) {
@@ -593,14 +718,20 @@ private fun ChunkTile(chunk: VideoChunk, onPlay: () -> Unit, onRetry: () -> Unit
                 DropdownMenuItem(
                     text = { Text("Play") },
                     leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
-                    onClick = { menuOpen = false; onPlay() }
+                    onClick = {
+                        menuOpen = false
+                        onPlay()
+                    }
                 )
             }
             if (chunk.status == UploadStatus.FAILED) {
                 DropdownMenuItem(
                     text = { Text("Retry Upload") },
                     leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                    onClick = { menuOpen = false; onRetry() }
+                    onClick = {
+                        menuOpen = false
+                        onRetry()
+                    }
                 )
             }
         }
@@ -625,7 +756,12 @@ private fun ChunkThumbnail(path: String, modifier: Modifier) {
                 } else {
                     retriever.getFrameAtTime(500_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)?.let { full ->
                         val scale = 320f / maxOf(full.width, full.height)
-                        Bitmap.createScaledBitmap(full, (full.width * scale).toInt(), (full.height * scale).toInt(), true)
+                        Bitmap.createScaledBitmap(
+                            full,
+                            (full.width * scale).toInt(),
+                            (full.height * scale).toInt(),
+                            true
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -642,7 +778,12 @@ private fun ChunkThumbnail(path: String, modifier: Modifier) {
     Box(modifier = modifier.background(AppColors.surfaceRaised), contentAlignment = Alignment.Center) {
         val image = bitmap
         if (image != null) {
-            Image(image.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            Image(
+                image.asImageBitmap(),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
         } else {
             Icon(Icons.Filled.Videocam, contentDescription = null, tint = AppColors.tertiaryText)
         }

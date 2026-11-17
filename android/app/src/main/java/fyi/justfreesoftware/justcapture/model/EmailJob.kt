@@ -18,7 +18,6 @@ data class EmailJob(
     val recipients: List<String>,
     val subject: String,
     val bodyNote: String,
-    val includeTime: Boolean,
     /**
      * When true and no coordinates were known at enqueue time, the queue
      * fills them in from a fresh fix right before sending.

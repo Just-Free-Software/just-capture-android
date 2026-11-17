@@ -6,6 +6,8 @@ import fyi.justfreesoftware.justcapture.data.SessionStore
 import fyi.justfreesoftware.justcapture.model.EmailJob
 import fyi.justfreesoftware.justcapture.model.EmailStatus
 import fyi.justfreesoftware.justcapture.util.RetryPolicy
+import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,15 +21,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
-import java.util.UUID
 
 /**
  * Persistent outbox for alert emails. Jobs are stored to disk
  * (email_jobs.json) so they survive a kill/relaunch mid-outage; unsent jobs
  * are resumed after sign-in. Each send is retried with exponential backoff up
- * to RetryPolicy.MAX_ATTEMPTS; after that the job is left FAILED for a
- * manual retry from My Clips.
+ * to RetryPolicy.MAX_ATTEMPTS tries while online; after that the job is left
+ * FAILED until the app next retries failed work or the user retries it from
+ * My Clips.
  *
  * The job list is only mutated on the main thread ([scope] is
  * Main.immediate); file writes go to a single-threaded IO context.
@@ -37,6 +38,7 @@ class EmailQueueManager(
     private val sessionStore: SessionStore,
     private val authManager: GoogleAuthManager,
     private val locationManager: LocationManager,
+    private val network: NetworkMonitor,
     private val scope: CoroutineScope
 ) {
     companion object {
@@ -82,9 +84,23 @@ class EmailQueueManager(
                     .map { if (it.status == EmailStatus.SENDING) it.copy(status = EmailStatus.PENDING) else it }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load email jobs", e)
+                // The next save would replace a file this build can't read
+                // with the jobs it knows about, which is none. Keep a copy so
+                // the outbox isn't destroyed by a decoding mistake.
+                runCatching {
+                    storageFile.copyTo(File(context.filesDir, "email_jobs.unreadable.json"), overwrite = true)
+                }
             }
         }
     }
+
+    /** Sends are running or waiting to retry. */
+    val hasActiveWork: Boolean
+        get() = activeTasks.values.any { it.isActive }
+
+    /** Something still needs the app to run: an unsent email, or a link owed to someone who already got the alert. */
+    val hasOutstandingWork: Boolean
+        get() = _jobs.value.any { it.status != EmailStatus.SENT || it.needsLinkFollowUp }
 
     private fun job(id: String): EmailJob? = _jobs.value.firstOrNull { it.id == id }
 
@@ -93,7 +109,6 @@ class EmailQueueManager(
         recipients: List<String>,
         subject: String,
         bodyNote: String,
-        includeTime: Boolean,
         includeLocation: Boolean
     ): EmailJob {
         val fix = if (includeLocation) locationManager.freshFix() else null
@@ -104,7 +119,6 @@ class EmailQueueManager(
             recipients = recipients,
             subject = subject,
             bodyNote = bodyNote,
-            includeTime = includeTime,
             includeLocation = includeLocation,
             address = fix?.let { locationManager.address(it) },
             latitude = fix?.latitude,
@@ -116,10 +130,15 @@ class EmailQueueManager(
         return job
     }
 
-    /** Re-attempts every job that isn't yet confirmed sent. Called after sign-in. */
-    fun resumeAll() {
+    /**
+     * Restarts every unsent job that isn't already running. [retryFailed]
+     * also gives jobs that ran out of tries a fresh set.
+     */
+    fun resumeAll(retryFailed: Boolean) {
         for (job in _jobs.value) {
-            if (job.status != EmailStatus.SENT) startSending(job.id)
+            val isDone = job.status == EmailStatus.SENT || activeTasks[job.id]?.isActive == true
+            val isOutOfTries = job.status == EmailStatus.FAILED && !retryFailed
+            if (!isDone && !isOutOfTries) startSending(job.id)
         }
         // Covers a follow-up that was owed when the app was killed.
         _jobs.value.filter { it.needsLinkFollowUp }.map { it.sessionId }.toSet().forEach { sendLinkFollowUps(it) }
@@ -144,7 +163,6 @@ class EmailQueueManager(
                 recipients = original.recipients,
                 subject = "Recording link: ${original.subject}",
                 bodyNote = "The link to the recording wasn't ready when the first email went out. Here it is.",
-                includeTime = original.includeTime,
                 isLinkFollowUp = true
             )
         }
@@ -189,39 +207,50 @@ class EmailQueueManager(
         }
     }
 
-    /** Waits until the job's session has a Drive folder, or the timeout passes. */
-    private suspend fun waitForFolder(sessionId: String, waitMs: Long) {
-        val deadline = System.currentTimeMillis() + waitMs
-        while (true) {
-            // No session (e.g. deleted) means there's no folder to wait for.
-            val session = sessionStore.session(sessionId) ?: return
-            if (session.driveFolderId != null) return
-            if (System.currentTimeMillis() >= deadline) return
+    /** Gives a job's first try a moment for the Drive folder and a location to turn up. */
+    private suspend fun waitForDetails(job: EmailJob, isFirstTry: Boolean) {
+        if (!isFirstTry) {
+            resolveLocation(job.id, waitMs = 0L)
+            return
+        }
+        // The folder is created in parallel when recording starts. No session
+        // (e.g. deleted) means there's no folder to wait for.
+        val folderDeadline = System.currentTimeMillis() + FOLDER_WAIT_MS
+        while (sessionStore.session(job.sessionId)?.driveFolderId == null &&
+            sessionStore.session(job.sessionId) != null && System.currentTimeMillis() < folderDeadline
+        ) {
             delay(POLL_MS)
         }
+        // The location wait counts from when the job was queued, so it
+        // overlaps the folder wait instead of adding to it.
+        val elapsed = System.currentTimeMillis() - job.createdAtEpochMs
+        resolveLocation(job.id, waitMs = maxOf(0L, LOCATION_WAIT_MS - elapsed))
     }
 
     private fun startSending(jobId: String) {
         activeTasks.remove(jobId)?.cancel()
         activeTasks[jobId] = scope.launch {
-            var attempt = job(jobId)?.attempts ?: return@launch
+            // Tries left are counted per run, unlike the job's `attempts`, so a
+            // job restarted later isn't down to its last try. Offline tries
+            // don't count.
+            var failures = 0
             while (true) {
                 val queued = job(jobId) ?: return@launch
-                if (queued.status == EmailStatus.SENT) return@launch
-
-                attempt += 1
-                val currentAttempt = attempt
-                updateJob(jobId) {
-                    it.copy(attempts = currentAttempt, lastAttemptEpochMs = System.currentTimeMillis(), status = EmailStatus.SENDING)
+                if (queued.status == EmailStatus.SENT) {
+                    activeTasks.remove(jobId)
+                    return@launch
                 }
 
-                if (currentAttempt == 1) waitForFolder(queued.sessionId, FOLDER_WAIT_MS)
-                // The location wait counts from when the job was queued, so it
-                // overlaps the folder wait instead of adding to it.
-                val locationWait = if (currentAttempt == 1) {
-                    maxOf(0L, LOCATION_WAIT_MS - (System.currentTimeMillis() - queued.createdAtEpochMs))
-                } else 0L
-                resolveLocation(jobId, locationWait)
+                val currentAttempt = queued.attempts + 1
+                updateJob(jobId) {
+                    it.copy(
+                        attempts = currentAttempt,
+                        lastAttemptEpochMs = System.currentTimeMillis(),
+                        status = EmailStatus.SENDING
+                    )
+                }
+
+                waitForDetails(queued, isFirstTry = currentAttempt == 1)
 
                 val job = job(jobId) ?: return@launch
                 try {
@@ -234,7 +263,7 @@ class EmailQueueManager(
                         to = job.recipients,
                         subject = job.subject,
                         bodyNote = job.bodyNote,
-                        startedAtMs = if (job.includeTime) job.createdAtEpochMs else null,
+                        startedAtMs = job.createdAtEpochMs,
                         address = job.address,
                         latitude = job.latitude,
                         longitude = job.longitude,
@@ -250,16 +279,22 @@ class EmailQueueManager(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    if (currentAttempt >= RetryPolicy.MAX_ATTEMPTS) {
+                    if (network.isOffline(e)) {
+                        updateJob(jobId) { it.copy(status = EmailStatus.PENDING) }
+                        network.waitForRestoredConnection(RetryPolicy.MAX_DELAY_MS)
+                        continue
+                    }
+                    failures += 1
+                    if (failures >= RetryPolicy.MAX_ATTEMPTS) {
                         updateJob(jobId) { it.copy(status = EmailStatus.FAILED) }
-                        Log.e(TAG, "Email to ${job.recipients.joinToString(", ")} failed after $currentAttempt attempts: ${e.message}")
+                        Log.e(TAG, "Email for session ${job.sessionId} failed after $failures attempts: ${e.message}")
                         activeTasks.remove(jobId)
                         return@launch
                     }
                     updateJob(jobId) { it.copy(status = EmailStatus.PENDING) }
-                    val delaySec = RetryPolicy.delayForAttempt(currentAttempt)
-                    Log.w(TAG, "Email attempt $currentAttempt failed, retrying in ${delaySec.toInt()}s: ${e.message}")
-                    delay((delaySec * 1000).toLong())
+                    val delaySec = RetryPolicy.delayForAttempt(failures)
+                    Log.w(TAG, "Email attempt $failures failed, retrying in ${delaySec.toInt()}s: ${e.message}")
+                    network.waitForRestoredConnection((delaySec * 1000).toLong())
                 }
             }
         }

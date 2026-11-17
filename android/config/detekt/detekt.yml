@@ -1,0 +1,32 @@
+# Overrides on top of detekt's default config (buildUponDefaultConfig = true).
+# Formatting is ktlint's job; detekt covers code smells.
+
+style:
+  # ktlint enforces line length (see .editorconfig).
+  MaxLineLength:
+    active: false
+  MagicNumber:
+    # Compose UI code is full of literal dp/sp/alpha values that read fine inline.
+    ignoreAnnotated: ['Composable', 'Preview']
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+  ReturnCount:
+    excludeGuardClauses: true
+  UnusedPrivateFunction:
+    ignoreAnnotated: ['Preview']
+
+naming:
+  FunctionNaming:
+    # Composable functions are PascalCase by convention.
+    ignoreAnnotated: ['Composable']
+
+complexity:
+  # Composables are long and take many parameters by nature.
+  LongMethod:
+    ignoreAnnotated: ['Composable']
+  LongParameterList:
+    ignoreAnnotated: ['Composable']
+  CyclomaticComplexMethod:
+    ignoreAnnotated: ['Composable']
+  TooManyFunctions:
+    ignoreAnnotated: ['Composable']

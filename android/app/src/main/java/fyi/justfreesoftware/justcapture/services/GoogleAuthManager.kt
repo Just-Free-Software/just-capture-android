@@ -8,6 +8,9 @@ import android.util.Base64
 import android.util.Log
 import androidx.browser.customtabs.CustomTabsIntent
 import fyi.justfreesoftware.justcapture.config.AppConfig
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,15 +18,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.Json
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.concurrent.TimeUnit
 
 class NotSignedInException : Exception("Not signed in")
 
@@ -32,10 +32,7 @@ class NotSignedInException : Exception("Not signed in")
  * based session restore (mirrors the iOS app's GIDSignIn behavior). Tokens are
  * stored in private SharedPreferences.
  */
-class GoogleAuthManager(
-    context: Context,
-    private val scope: CoroutineScope
-) {
+class GoogleAuthManager(context: Context, private val scope: CoroutineScope) {
     val isSignedIn = MutableStateFlow(false)
     val isAuthenticating = MutableStateFlow(false)
     val userEmail = MutableStateFlow<String?>(null)

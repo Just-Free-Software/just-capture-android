@@ -6,8 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +25,8 @@ import androidx.compose.material.icons.filled.SlowMotionVideo
 import androidx.compose.material.icons.filled.VideoLibrary
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -36,9 +38,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -52,6 +57,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -59,9 +66,12 @@ import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
 import fyi.justfreesoftware.justcapture.R
 import fyi.justfreesoftware.justcapture.config.AppConfig
+import fyi.justfreesoftware.justcapture.config.EmailSettings
+import fyi.justfreesoftware.justcapture.ui.components.LocalOverlayHost
 import fyi.justfreesoftware.justcapture.ui.screens.MyClipsScreen
 import fyi.justfreesoftware.justcapture.ui.screens.RecordingScreen
 import fyi.justfreesoftware.justcapture.ui.screens.SettingsScreen
+import fyi.justfreesoftware.justcapture.ui.screens.SettingsSection
 import fyi.justfreesoftware.justcapture.ui.screens.WatchScreen
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
 
@@ -84,10 +94,38 @@ private val tabs = listOf(
     Tab("Settings", Icons.Filled.Settings)
 )
 
+private const val SETTINGS_TAB = 3
+
 @Composable
 private fun MainTabs(graph: AppGraph) {
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var settingsScrollTarget by remember { mutableStateOf<SettingsSection?>(null) }
 
+    // Notifications are on but there's nobody to send them to. Switching
+    // notifications off is a choice, so that doesn't get a badge.
+    val needsContacts = graph.settings.emailAlertsEnabled &&
+        EmailSettings.parseRecipients(graph.settings.emailRecipients).isEmpty()
+
+    // Screens put a video player here to cover the whole app, tab bar included.
+    val overlay = remember { mutableStateOf<(@Composable () -> Unit)?>(null) }
+
+    CompositionLocalProvider(LocalOverlayHost provides overlay) {
+        MainScaffold(graph, selectedTab, needsContacts, settingsScrollTarget, onSelectTab = { selectedTab = it }) {
+            settingsScrollTarget = it
+        }
+    }
+    overlay.value?.invoke()
+}
+
+@Composable
+private fun MainScaffold(
+    graph: AppGraph,
+    selectedTab: Int,
+    needsContacts: Boolean,
+    settingsScrollTarget: SettingsSection?,
+    onSelectTab: (Int) -> Unit,
+    onSettingsScrollTarget: (SettingsSection?) -> Unit
+) {
     Scaffold(
         containerColor = AppColors.background,
         // Each screen pads for the status bar itself (the camera preview runs
@@ -98,8 +136,17 @@ private fun MainTabs(graph: AppGraph) {
                 tabs.forEachIndexed { index, tab ->
                     NavigationBarItem(
                         selected = selectedTab == index,
-                        onClick = { selectedTab = index },
-                        icon = { Icon(tab.icon, contentDescription = null) },
+                        onClick = { onSelectTab(index) },
+                        icon = {
+                            if (index == SETTINGS_TAB && needsContacts) {
+                                BadgedBox(
+                                    badge = { Badge { Text("!") } },
+                                    modifier = Modifier.semantics { contentDescription = "No contacts to notify" }
+                                ) { Icon(tab.icon, contentDescription = null) }
+                            } else {
+                                Icon(tab.icon, contentDescription = null)
+                            }
+                        },
                         label = { Text(tab.label) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AppColors.accent,
@@ -119,10 +166,20 @@ private fun MainTabs(graph: AppGraph) {
                 .padding(innerPadding)
         ) {
             when (selectedTab) {
-                0 -> RecordingScreen(graph)
+                0 -> RecordingScreen(graph, openSettings = { section ->
+                    onSettingsScrollTarget(section)
+                    onSelectTab(SETTINGS_TAB)
+                })
+
                 1 -> MyClipsScreen(graph)
+
                 2 -> WatchScreen(graph)
-                3 -> SettingsScreen(graph)
+
+                SETTINGS_TAB -> SettingsScreen(
+                    graph,
+                    scrollTarget = settingsScrollTarget,
+                    onScrolledToTarget = { onSettingsScrollTarget(null) }
+                )
             }
         }
     }
@@ -187,7 +244,10 @@ private fun SignInScreen(graph: AppGraph) {
                 modifier = Modifier.padding(top = 40.dp, start = 12.dp, end = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                Feature(Icons.Filled.CloudUpload, "As you record, each clip is uploaded to your Google Drive when you have a connection.")
+                Feature(
+                    Icons.Filled.CloudUpload,
+                    "As you record, each clip is uploaded to your Google Drive when you have a connection."
+                )
                 Feature(Icons.Filled.MarkEmailUnread, "The people you choose get an email with a link to watch.")
             }
 
@@ -206,7 +266,11 @@ private fun SignInScreen(graph: AppGraph) {
                     .height(54.dp)
             ) {
                 if (isAuthenticating) {
-                    CircularProgressIndicator(color = AppColors.onAccent, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
+                    CircularProgressIndicator(
+                        color = AppColors.onAccent,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(20.dp)
+                    )
                 } else {
                     Icon(Icons.Filled.AccountCircle, contentDescription = null)
                 }

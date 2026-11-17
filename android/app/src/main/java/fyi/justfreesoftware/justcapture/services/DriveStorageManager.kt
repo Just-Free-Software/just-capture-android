@@ -22,6 +22,12 @@ class DriveStorageManager(
 
     companion object {
         const val LOW_STORAGE_THRESHOLD_BYTES = 250L * 1024 * 1024
+
+        /**
+         * Well above the on-screen warning: clip sizes vary by phone and
+         * scene, and the email has to go out while the account can still send.
+         */
+        const val LOW_STORAGE_EMAIL_THRESHOLD_BYTES = 1024L * 1024 * 1024
         const val QUOTA_REFRESH_INTERVAL_MS = 60_000L
 
         /**
@@ -31,6 +37,11 @@ class DriveStorageManager(
          */
         const val QUOTA_LAG_WINDOW_MS = 120_000L
         private const val TAG = "DriveStorageManager"
+
+        fun shouldSendLowStorageEmail(quota: DriveStorageQuota?, forcedOut: Boolean): Boolean {
+            val available = quota?.availableBytes
+            return !forcedOut && available != null && available > 0 && available < LOW_STORAGE_EMAIL_THRESHOLD_BYTES
+        }
     }
 
     private val _quota = MutableStateFlow<DriveStorageQuota?>(null)
@@ -59,6 +70,9 @@ class DriveStorageManager(
     }
 
     fun availableBytes(): Long? = _quota.value?.availableBytes
+
+    /** Nearly full but not out; being out is handled by the storage-full path. */
+    fun shouldSendLowStorageEmail(): Boolean = shouldSendLowStorageEmail(_quota.value, _forcedOutOfStorage.value)
 
     fun bytesPerSecondEstimate(): Double {
         var totalBytes = 0.0

@@ -86,6 +86,7 @@ class StereoDownmixer {
         return when (mode) {
             // Drop a channel only when it's far quieter than the other...
             Mode.MIX -> if (difference > ENTER_SINGLE_DB) louderMode else Mode.MIX
+
             // ...and only bring it back once it's clearly contributing again.
             else -> when {
                 difference < EXIT_SINGLE_DB -> Mode.MIX

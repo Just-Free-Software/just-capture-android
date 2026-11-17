@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import fyi.justfreesoftware.justcapture.model.RecordingSession
 import fyi.justfreesoftware.justcapture.model.VideoChunk
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -13,7 +14,6 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /**
  * Persistent store for recording sessions, persisted as sessions.json in the
@@ -37,6 +37,17 @@ class SessionStore(context: Context) {
 
     private val _sessions = MutableStateFlow<List<RecordingSession>>(emptyList())
     val sessions: StateFlow<List<RecordingSession>> = _sessions.asStateFlow()
+
+    /**
+     * Sessions still marked as recording when they were loaded, meaning the
+     * app died mid-recording. They may have clips that were never listed.
+     */
+    var interruptedSessionIds: Set<String> = emptySet()
+        private set
+
+    fun clearInterruptedSessions() {
+        interruptedSessionIds = emptySet()
+    }
 
     val currentSession: RecordingSession?
         get() = _sessions.value.firstOrNull { it.isActive } ?: _sessions.value.firstOrNull()
@@ -71,11 +82,7 @@ class SessionStore(context: Context) {
         }
     }
 
-    suspend fun updateChunk(
-        sessionId: String,
-        chunkId: String,
-        transform: (VideoChunk) -> VideoChunk
-    ) {
+    suspend fun updateChunk(sessionId: String, chunkId: String, transform: (VideoChunk) -> VideoChunk) {
         update(sessionId) { session ->
             session.copy(chunks = session.chunks.map { if (it.id == chunkId) transform(it) else it })
         }
@@ -89,8 +96,11 @@ class SessionStore(context: Context) {
     fun updateChunkInMemory(sessionId: String, chunkId: String, transform: (VideoChunk) -> VideoChunk) {
         _sessions.update { list ->
             list.map { session ->
-                if (session.id != sessionId) session
-                else session.copy(chunks = session.chunks.map { if (it.id == chunkId) transform(it) else it })
+                if (session.id != sessionId) {
+                    session
+                } else {
+                    session.copy(chunks = session.chunks.map { if (it.id == chunkId) transform(it) else it })
+                }
             }
         }
     }
@@ -142,6 +152,7 @@ class SessionStore(context: Context) {
                 // Any session flagged active on disk was interrupted by a kill/relaunch;
                 // finalize it so it stops appearing as "in progress".
                 val hadActive = decoded.any { it.isActive }
+                interruptedSessionIds = decoded.filter { it.isActive }.map { it.id }.toSet()
                 _sessions.value = decoded.map { if (it.isActive) it.copy(isActive = false) else it }
                 if (hadActive) persist()
             } catch (e: Exception) {

@@ -6,6 +6,14 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import fyi.justfreesoftware.justcapture.config.AppConfig
+import java.io.File
+import java.io.IOException
+import java.io.RandomAccessFile
+import java.security.MessageDigest
+import java.time.Instant
+import java.util.UUID
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -25,14 +33,6 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import java.io.File
-import java.io.IOException
-import java.io.RandomAccessFile
-import java.security.MessageDigest
-import java.time.Instant
-import java.util.UUID
-import java.util.concurrent.TimeUnit
-import kotlin.coroutines.coroutineContext
 
 /** Errors Drive reports that the app handles differently from a plain failure. */
 sealed class DriveException(message: String) : IOException(message) {
@@ -97,6 +97,12 @@ object GoogleDriveService {
 
     private const val UPLOAD_CHUNK_SIZE = 2 * 1024 * 1024
 
+    /** Drive's "send more" reply to a resumable upload. It has no Location, so it isn't a redirect. */
+    private const val HTTP_RESUME_INCOMPLETE = 308
+
+    /** Not Found and Gone: what Drive answers once a resumable upload link has lapsed. */
+    private val EXPIRED_UPLOAD_CODES = setOf(404, 410)
+
     /**
      * Upper bound on pages fetched by one listing, so a misbehaving
      * `nextPageToken` can't turn into an endless stream of requests.
@@ -142,8 +148,7 @@ object GoogleDriveService {
     private suspend fun execute(request: Request): Response =
         withContext(Dispatchers.IO) { client.newCall(request).execute() }
 
-    private fun parse(text: String): JsonObject? =
-        runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
+    private fun parse(text: String): JsonObject? = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull()
 
     private fun errorReasons(text: String): List<String> =
         parse(text)?.get("error")?.jsonObject?.get("errors")?.jsonArray
@@ -240,16 +245,19 @@ object GoogleDriveService {
         }
     }
 
-    suspend fun uploadFile(
-        file: File,
-        fileName: String,
-        folderId: String,
-        accessToken: String,
-        onProgress: (Double) -> Unit
-    ): String {
-        val fileSize = file.length()
+    /** Where a resumable upload stands on Drive's side. */
+    sealed interface ResumableUploadState {
+        data class Complete(val fileId: String) : ResumableUploadState
 
-        // 1. Initiate a resumable upload session.
+        /** Drive has everything before this byte offset. */
+        data class Incomplete(val nextOffset: Long) : ResumableUploadState
+
+        /** The upload link is no longer valid, so a new one is needed. */
+        data object Expired : ResumableUploadState
+    }
+
+    /** Creates a resumable upload and returns its link. */
+    suspend fun createUploadSession(fileName: String, fileSize: Long, folderId: String, accessToken: String): String {
         val metadata = buildJsonObject {
             put("name", fileName)
             put("parents", buildJsonArray { add(folderId) })
@@ -262,19 +270,62 @@ object GoogleDriveService {
             .post(metadata.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val resumableUrl = execute(initiate).use { response ->
+        return execute(initiate).use { response ->
             val text = response.body?.string() ?: ""
             throwIfQuotaExceeded(text, response.code)
             response.header("Location")
                 ?: throw IOException("Resumable upload initiation failed: ${response.code}")
         }
+    }
 
-        // 2. Push the file contents in 2 MB chunks, streaming from disk.
+    /**
+     * Asks Drive how much of an upload arrived. An earlier attempt may have
+     * finished with the reply lost, so this is checked before sending again,
+     * which would otherwise waste data or leave a duplicate clip in the folder.
+     */
+    suspend fun resumableUploadState(sessionUrl: String, fileSize: Long): ResumableUploadState {
+        val request = Request.Builder()
+            .url(sessionUrl)
+            .header("Content-Range", "bytes */$fileSize")
+            .put(ByteArray(0).toRequestBody(null))
+            .build()
+
+        execute(request).use { response ->
+            val text = response.body?.string() ?: ""
+            return when {
+                response.isSuccessful -> ResumableUploadState.Complete(
+                    parse(text)?.get("id")?.jsonPrimitive?.content
+                        ?: throw IOException("Upload finished without a file id")
+                )
+
+                response.code == HTTP_RESUME_INCOMPLETE ->
+                    ResumableUploadState.Incomplete(nextUploadOffset(response.header("Range")))
+
+                response.code in EXPIRED_UPLOAD_CODES -> ResumableUploadState.Expired
+
+                else -> {
+                    throwIfQuotaExceeded(text, response.code)
+                    throw IOException("Upload status check failed: ${response.code}")
+                }
+            }
+        }
+    }
+
+    /** "bytes=0-N" means bytes up to N arrived; no header means none did. */
+    fun nextUploadOffset(rangeHeader: String?): Long =
+        rangeHeader?.substringAfterLast('-')?.trim()?.toLongOrNull()?.plus(1) ?: 0L
+
+    /**
+     * Sends a file to a resumable upload link in 2 MB pieces, streaming from
+     * disk and starting at [startOffset]. Returns the new file's id.
+     */
+    suspend fun uploadFile(file: File, sessionUrl: String, startOffset: Long, onProgress: (Double) -> Unit): String {
+        val fileSize = file.length()
         var fileId: String? = null
         withContext(Dispatchers.IO) {
             RandomAccessFile(file, "r").use { raf ->
                 val buffer = ByteArray(UPLOAD_CHUNK_SIZE)
-                var offset = 0L
+                var offset = startOffset.coerceIn(0L, fileSize)
                 while (fileId == null) {
                     coroutineContext.ensureActive()
                     val chunkLength = minOf(UPLOAD_CHUNK_SIZE.toLong(), fileSize - offset).toInt()
@@ -283,24 +334,30 @@ object GoogleDriveService {
                         raf.readFully(buffer, 0, chunkLength)
                     }
                     val builder = Request.Builder()
-                        .url(resumableUrl)
+                        .url(sessionUrl)
                         .put(buffer.copyOf(chunkLength).toRequestBody(MP4_MEDIA_TYPE))
                     if (chunkLength > 0) {
                         builder.header("Content-Range", "bytes $offset-${offset + chunkLength - 1}/$fileSize")
+                    } else if (fileSize > 0) {
+                        // Everything was sent but the reply was lost: ask for it again.
+                        builder.header("Content-Range", "bytes */$fileSize")
                     }
 
                     execute(builder.build()).use { response ->
                         val text = response.body?.string() ?: ""
                         when {
-                            response.code == 308 -> {
+                            response.code == HTTP_RESUME_INCOMPLETE -> {
+                                if (chunkLength == 0) throw IOException("Upload stalled at $offset of $fileSize")
                                 offset += chunkLength
                                 if (fileSize > 0) onProgress(offset.toDouble() / fileSize)
                             }
+
                             response.isSuccessful -> {
                                 fileId = parse(text)?.get("id")?.jsonPrimitive?.content
                                     ?: throw IOException("Upload finished without a file id")
                                 onProgress(1.0)
                             }
+
                             else -> {
                                 throwIfQuotaExceeded(text, response.code)
                                 throw IOException("Chunk upload failed: ${response.code}")
@@ -318,7 +375,8 @@ object GoogleDriveService {
         folderId: String,
         existingFileId: String?,
         accessToken: String
-    ): String = uploadOrUpdateTextFile("playlist.m3u8", "application/x-mpegURL", content, folderId, existingFileId, accessToken)
+    ): String =
+        uploadOrUpdateTextFile("playlist.m3u8", "application/x-mpegURL", content, folderId, existingFileId, accessToken)
 
     suspend fun uploadOrUpdateTextFile(
         name: String,
@@ -370,8 +428,7 @@ object GoogleDriveService {
         }
     }
 
-    fun getDirectDownloadUrl(fileId: String): String =
-        "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+    fun getDirectDownloadUrl(fileId: String): String = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
 
     // ---- Reading back from Drive ----
 
@@ -381,6 +438,7 @@ object GoogleDriveService {
             is ReadAccess.User -> {
                 builder.url(url).header("Authorization", "Bearer ${access.accessToken}")
             }
+
             ReadAccess.PublicLink -> {
                 if (AppConfig.DRIVE_API_KEY.isEmpty()) throw DriveException.ApiKeyMissing()
                 builder.url(url.newBuilder().addQueryParameter("key", AppConfig.DRIVE_API_KEY).build())
@@ -404,7 +462,10 @@ object GoogleDriveService {
         }.getOrNull() ?: runCatching { error?.get("status")?.jsonPrimitive?.content }.getOrNull()
 
         if (status == 429 || reason in setOf(
-                "userRateLimitExceeded", "rateLimitExceeded", "downloadQuotaExceeded", "dailyLimitExceeded"
+                "userRateLimitExceeded",
+                "rateLimitExceeded",
+                "downloadQuotaExceeded",
+                "dailyLimitExceeded"
             )
         ) {
             throw DriveException.RateLimited(reason ?: "HTTP $status")
