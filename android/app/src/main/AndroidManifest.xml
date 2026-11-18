@@ -33,19 +33,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <!-- Receives the OAuth 2.0 redirect after Google sign-in in a browser tab. -->
-        <activity
-            android:name=".auth.AuthRedirectActivity"
-            android:exported="true"
-            android:theme="@style/Theme.JustCapture.Translucent">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="com.googleusercontent.apps.1003597781614-l45439l3m6is4lcn2bmhhhj67292inmg" />
-            </intent-filter>
-        </activity>
     </application>
 
 </manifest>

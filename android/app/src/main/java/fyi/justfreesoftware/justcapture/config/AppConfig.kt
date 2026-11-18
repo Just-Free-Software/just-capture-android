@@ -1,13 +1,18 @@
 package fyi.justfreesoftware.justcapture.config
 
 object AppConfig {
-    const val GOOGLE_CLIENT_ID = "1003597781614-l45439l3m6is4lcn2bmhhhj67292inmg.apps.googleusercontent.com"
-    const val REDIRECT_URI = "com.googleusercontent.apps.1003597781614-l45439l3m6is4lcn2bmhhhj67292inmg:/oauthredirect"
-
+    // There's no client ID here: Google Play services matches the app to its
+    // Android OAuth client by package name and signing certificate.
     val OAUTH_SCOPES = listOf(
         "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/gmail.send",
         "https://www.googleapis.com/auth/userinfo.email"
+    )
+
+    /** Sign-in fails if the user unticks either of these on the consent screen. */
+    val REQUIRED_SCOPES = setOf(
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/gmail.send"
     )
 
     /**
@@ -18,8 +23,6 @@ object AppConfig {
      */
     const val DRIVE_API_KEY = "AIzaSyBpcpUL9tcq_13Jnl-CE9qpu0VcO6ZtR9Q"
 
-    const val AUTHORIZATION_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
-    const val TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
     const val USER_INFO_ENDPOINT = "https://www.googleapis.com/oauth2/v2/userinfo"
 
     const val DEFAULT_CHUNK_DURATION_SEC = 10.0

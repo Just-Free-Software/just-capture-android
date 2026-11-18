@@ -1,5 +1,7 @@
 package fyi.justfreesoftware.justcapture.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -54,7 +56,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
@@ -74,6 +75,7 @@ import fyi.justfreesoftware.justcapture.ui.screens.SettingsScreen
 import fyi.justfreesoftware.justcapture.ui.screens.SettingsSection
 import fyi.justfreesoftware.justcapture.ui.screens.WatchScreen
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun JustCaptureApp(graph: AppGraph) {
@@ -189,7 +191,11 @@ private fun MainScaffold(
 private fun SignInScreen(graph: AppGraph) {
     val isAuthenticating by graph.authManager.isAuthenticating.collectAsState()
     val signInError by graph.authManager.signInError.collectAsState()
-    val context = LocalContext.current
+    // Play services shows the account picker and consent screen itself; the
+    // launcher hands the result back to the auth manager.
+    val signInLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        graph.appScope.launch { graph.authManager.handleSignInResult(result.resultCode, result.data) }
+    }
     val uriHandler = LocalUriHandler.current
 
     Box(
@@ -254,7 +260,7 @@ private fun SignInScreen(graph: AppGraph) {
             Spacer(Modifier.weight(1f))
 
             Button(
-                onClick = { graph.authManager.signIn(context) },
+                onClick = { graph.authManager.signIn { signInLauncher.launch(it) } },
                 enabled = !isAuthenticating,
                 colors = ButtonDefaults.buttonColors(
                     disabledContainerColor = AppColors.accent.copy(alpha = 0.6f),

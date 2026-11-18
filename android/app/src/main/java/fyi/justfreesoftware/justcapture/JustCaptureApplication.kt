@@ -295,7 +295,6 @@ class JustCaptureApplication : Application() {
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
-                graph.authManager.onAppResumed()
                 graph.locationManager.refreshPermission()
                 // Back on screen: retries now, rather than leaving failed
                 // work until the next launch.
