@@ -220,7 +220,6 @@ class JustCaptureApplication : Application() {
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) {
-                graph.authManager.onAppResumed()
                 graph.locationManager.refreshPermission()
             }
 
