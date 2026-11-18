@@ -1,12 +1,19 @@
 package fyi.justfreesoftware.justcapture.services
 
+import android.accounts.Account
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.net.Uri
-import android.util.Base64
 import android.util.Log
-import androidx.browser.customtabs.CustomTabsIntent
+import androidx.activity.result.IntentSenderRequest
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.AuthorizationResult
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.auth.api.identity.RevokeAccessRequest
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.CommonStatusCodes
+import com.google.android.gms.common.api.Scope
 import fyi.justfreesoftware.justcapture.config.AppConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,23 +21,29 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.Json
-import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.security.MessageDigest
-import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 
 class NotSignedInException : Exception("Not signed in")
 
 /**
- * Google OAuth 2.0 sign-in using Chrome Custom Tabs + PKCE, with refresh-token
- * based session restore (mirrors the iOS app's GIDSignIn behavior). Tokens are
- * stored in private SharedPreferences.
+ * Google sign-in through Google Play services' AuthorizationClient.
+ *
+ * Play services identifies the app by its package name and signing
+ * certificate, which must match an Android OAuth client in the Cloud project.
+ * It also keeps the grant and refreshes access tokens itself, so the app
+ * stores only the signed-in account's email, and background work can get a
+ * token without a refresh token or a server.
+ *
+ * This replaced a browser sign-in that borrowed the iOS OAuth client. Google
+ * expects each platform to use its own client type, and blocks custom-scheme
+ * redirects for Android clients, so that flow couldn't be kept.
  */
 class GoogleAuthManager(
     context: Context,
@@ -43,10 +56,11 @@ class GoogleAuthManager(
     /** Shown to the user when sign-in fails for a reason other than cancelling. */
     val signInError = MutableStateFlow<String?>(null)
 
+    private val authClient = Identity.getAuthorizationClient(context.applicationContext)
+
     private val client = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -55,260 +69,170 @@ class GoogleAuthManager(
 
     private val tokenMutex = Mutex()
 
-    private class PendingAuth(val state: String, val codeVerifier: String)
-
-    @Volatile
-    private var pendingAuth: PendingAuth? = null
+    private val scopes = AppConfig.OAUTH_SCOPES.map { Scope(it) }
 
     /**
-     * Sign in state survives process death as long as a refresh token is on
-     * disk. If we're offline at launch we still consider the user signed in;
+     * Sign-in state survives process death as long as the account is saved.
+     * If we're offline at launch we still consider the user signed in;
      * network calls will surface errors and retry on their own schedules.
      */
     suspend fun restoreSignIn() {
-        if (prefs.getString(KEY_REFRESH_TOKEN, null) == null) return
+        // Builds before the switch to Play services saved a refresh token for
+        // the iOS client. It can't be used with this flow, so those users
+        // sign in once more.
+        if (prefs.contains(LEGACY_KEY_REFRESH_TOKEN)) {
+            Log.i(TAG, "Dropping a sign-in from the old browser flow")
+            prefs.edit().clear().apply()
+            return
+        }
+        val email = prefs.getString(KEY_ACCOUNT_EMAIL, null) ?: return
+        userEmail.value = email
         isSignedIn.value = true
         try {
-            val token = validAccessToken()
-            fetchUserInfo(token)
+            validAccessToken()
         } catch (e: Exception) {
             Log.w(TAG, "Could not refresh sign-in at launch (offline?): ${e.message}")
         }
     }
 
-    fun signIn(context: Context) {
+    /**
+     * Starts sign-in. If Play services needs the user to pick an account or
+     * grant access, [showScreen] is called with its screen, and the result comes
+     * back through [handleSignInResult].
+     */
+    fun signIn(showScreen: (IntentSenderRequest) -> Unit) {
         if (isAuthenticating.value) return
         isAuthenticating.value = true
         signInError.value = null
         scope.launch {
             try {
-                val verifier = randomUrlSafe(32)
-                val state = randomUrlSafe(16)
-                pendingAuth = PendingAuth(state, verifier)
-                val challenge = base64UrlSha256(verifier)
-
-                val uri = Uri.parse(AppConfig.AUTHORIZATION_ENDPOINT).buildUpon()
-                    .appendQueryParameter("client_id", AppConfig.GOOGLE_CLIENT_ID)
-                    .appendQueryParameter("redirect_uri", AppConfig.REDIRECT_URI)
-                    .appendQueryParameter("response_type", "code")
-                    .appendQueryParameter("scope", AppConfig.OAUTH_SCOPES.joinToString(" "))
-                    .appendQueryParameter("state", state)
-                    .appendQueryParameter("code_challenge", challenge)
-                    .appendQueryParameter("code_challenge_method", "S256")
-                    .appendQueryParameter("access_type", "offline")
-                    .appendQueryParameter("prompt", "consent")
-                    .build()
-
-                launchCustomTab(context, uri)
+                val result = authClient.authorize(request(account = null)).await()
+                val pendingIntent = result.pendingIntent
+                if (result.hasResolution() && pendingIntent != null) {
+                    // Stays "authenticating" until the screen reports back.
+                    showScreen(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+                    return@launch
+                }
+                // Access was already granted on this phone.
+                finishSignIn(result)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start sign-in", e)
-                isAuthenticating.value = false
+                reportSignInFailure(e)
             }
+            isAuthenticating.value = false
         }
     }
 
-    private fun launchCustomTab(context: Context, uri: Uri) {
+    /** Called with the result of the screen [signIn] launched. */
+    suspend fun handleSignInResult(resultCode: Int, data: Intent?) {
         try {
-            CustomTabsIntent.Builder().build().launchUrl(context, uri)
+            // Backing out of the account picker isn't worth an alert.
+            if (resultCode != Activity.RESULT_OK || data == null) return
+            finishSignIn(authClient.getAuthorizationResultFromIntent(data))
         } catch (e: Exception) {
-            try {
-                context.startActivity(Intent(Intent.ACTION_VIEW, uri))
-            } catch (e2: Exception) {
-                Log.e(TAG, "No browser available for sign-in", e2)
-                signInError.value = "No web browser is available to sign in with."
-                isAuthenticating.value = false
-            }
-        }
-    }
-
-    /**
-     * Called when the app comes back to the foreground. If the browser tab
-     * was closed without completing sign-in, no redirect ever arrives, so the
-     * spinner is cleared here. The pending request is kept in case the
-     * redirect is merely late.
-     */
-    fun onAppResumed() {
-        if (isAuthenticating.value && pendingAuth != null) {
-            isAuthenticating.value = false
-        }
-    }
-
-    /**
-     * Called from AuthRedirectActivity with the redirect URI the browser
-     * bounced back to. Exchanges the authorization code for tokens.
-     */
-    suspend fun handleRedirect(uri: Uri) {
-        val pending = pendingAuth
-        pendingAuth = null
-
-        val error = uri.getQueryParameter("error")
-        if (error != null) {
-            Log.w(TAG, "Sign-in was rejected by the user or server: $error")
-            // The user declining isn't worth an alert.
-            if (error != "access_denied") signInError.value = "Google sign-in failed ($error)."
-            isAuthenticating.value = false
-            return
-        }
-
-        if (pending == null ||
-            uri.getQueryParameter("state") != pending.state ||
-            uri.getQueryParameter("code") == null
-        ) {
-            Log.w(TAG, "Redirect state mismatch; ignoring")
-            isAuthenticating.value = false
-            return
-        }
-
-        try {
-            exchangeCode(uri.getQueryParameter("code")!!, pending.codeVerifier)
-            isSignedIn.value = true
-        } catch (e: Exception) {
-            Log.e(TAG, "Token exchange failed", e)
-            signInError.value = "Couldn't finish signing in. Check your connection and try again."
+            reportSignInFailure(e)
         } finally {
             isAuthenticating.value = false
         }
     }
 
-    private suspend fun exchangeCode(code: String, codeVerifier: String) {
-        val body = FormBody.Builder()
-            .add("grant_type", "authorization_code")
-            .add("code", code)
-            .add("client_id", AppConfig.GOOGLE_CLIENT_ID)
-            .add("redirect_uri", AppConfig.REDIRECT_URI)
-            .add("code_verifier", codeVerifier)
-            .build()
-
-        val request = Request.Builder()
-            .url(AppConfig.TOKEN_ENDPOINT)
-            .post(body)
-            .build()
-
-        val tokenJson = executeJson(request).second
-
-        val accessToken = tokenJson["access_token"]?.jsonPrimitive?.content
-            ?: throw IllegalStateException("No access_token in response")
-        val expiresInMs = (tokenJson["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3600L) * 1000
-
-        prefs.edit()
-            .putString(KEY_ACCESS_TOKEN, accessToken)
-            .putLong(KEY_TOKEN_EXPIRY, System.currentTimeMillis() + expiresInMs)
-            .apply()
-        tokenJson["refresh_token"]?.jsonPrimitive?.content?.let { refreshToken ->
-            prefs.edit().putString(KEY_REFRESH_TOKEN, refreshToken).apply()
+    private suspend fun finishSignIn(result: AuthorizationResult) {
+        val token = result.accessToken ?: throw IllegalStateException("No access token in authorization result")
+        // The consent screen can let people untick a permission. Without
+        // Drive and Gmail the app can't do its job, so don't half sign in.
+        val missing = AppConfig.REQUIRED_SCOPES - result.grantedScopes.toSet()
+        if (missing.isNotEmpty()) {
+            Log.w(TAG, "Sign-in is missing scopes: $missing")
+            signInError.value = "Just Capture needs permission to save to Google Drive and send email from Gmail. " +
+                "Sign in again and allow both."
+            return
         }
-
-        fetchUserInfo(accessToken)
+        val email = fetchEmail(token) ?: throw IllegalStateException("No email in user info")
+        prefs.edit().putString(KEY_ACCOUNT_EMAIL, email).apply()
+        userEmail.value = email
+        isSignedIn.value = true
     }
 
-    suspend fun validAccessToken(): String = tokenMutex.withLock {
-        val access = prefs.getString(KEY_ACCESS_TOKEN, null)
-        val expiry = prefs.getLong(KEY_TOKEN_EXPIRY, 0L)
-        if (access != null && System.currentTimeMillis() < expiry - 60_000) {
-            return access
+    private fun reportSignInFailure(e: Exception) {
+        val status = (e as? ApiException)?.statusCode
+        when (status) {
+            CommonStatusCodes.CANCELED -> return
+            CommonStatusCodes.DEVELOPER_ERROR -> Log.e(
+                TAG,
+                "Google rejected the app's identity. The Cloud project needs an Android OAuth client " +
+                    "for this package name and the SHA-1 of the key this build is signed with.",
+                e
+            )
+            else -> Log.e(TAG, "Sign-in failed", e)
         }
+        signInError.value = if (status == CommonStatusCodes.NETWORK_ERROR) {
+            "Couldn't reach Google. Check your connection and try again."
+        } else {
+            "Google sign-in failed. Try again."
+        }
+    }
 
-        val refresh = prefs.getString(KEY_REFRESH_TOKEN, null)
-            ?: throw NotSignedInException()
-
-        val body = FormBody.Builder()
-            .add("grant_type", "refresh_token")
-            .add("client_id", AppConfig.GOOGLE_CLIENT_ID)
-            .add("refresh_token", refresh)
-            .build()
-
-        val request = Request.Builder()
-            .url(AppConfig.TOKEN_ENDPOINT)
-            .post(body)
-            .build()
-
-        val (statusCode, tokenJson) = executeJson(request)
-
-        if (statusCode in 400..499) {
-            // The refresh token was revoked or expired: drop the session.
-            Log.w(TAG, "Refresh token rejected ($statusCode); signing out")
+    /**
+     * Play services returns its cached token, or refreshes it when it's
+     * expired, so this is normally a local call. Callers retry on their own
+     * backoff schedules, which bounds how often a failing refresh reaches
+     * Google.
+     */
+    suspend fun validAccessToken(): String = tokenMutex.withLock {
+        val email = prefs.getString(KEY_ACCOUNT_EMAIL, null) ?: throw NotSignedInException()
+        val result = authClient.authorize(request(Account(email, GOOGLE_ACCOUNT_TYPE))).await()
+        if (result.hasResolution()) {
+            // The user revoked access, or the account left the phone. Only
+            // the sign-in screen can fix that, and background work can't
+            // show it.
+            Log.w(TAG, "Authorization needs the user again; signing out")
             signOut()
             throw NotSignedInException()
         }
-
-        val accessToken = tokenJson["access_token"]?.jsonPrimitive?.content
-            ?: throw IllegalStateException("No access_token in refresh response")
-        val expiresInMs = (tokenJson["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3600L) * 1000
-
-        prefs.edit()
-            .putString(KEY_ACCESS_TOKEN, accessToken)
-            .putLong(KEY_TOKEN_EXPIRY, System.currentTimeMillis() + expiresInMs)
-            .apply()
-
-        if (userEmail.value == null) {
-            try {
-                fetchUserInfo(accessToken)
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to refresh user info: ${e.message}")
-            }
-        }
-
-        accessToken
+        result.accessToken ?: throw IllegalStateException("No access token in authorization result")
     }
 
     fun signOut() {
-        clearTokens()
+        val email = prefs.getString(KEY_ACCOUNT_EMAIL, null)
+        prefs.edit().clear().apply()
         isSignedIn.value = false
         userEmail.value = null
+        // Without revoking, Play services keeps the grant and the next
+        // sign-in would reuse this account without letting the user choose.
+        if (email != null) {
+            val request = RevokeAccessRequest.builder()
+                .setAccount(Account(email, GOOGLE_ACCOUNT_TYPE))
+                .setScopes(scopes)
+                .build()
+            authClient.revokeAccess(request)
+                .addOnFailureListener { Log.w(TAG, "Could not revoke access on sign-out: ${it.message}") }
+        }
     }
 
-    private fun clearTokens() {
-        prefs.edit().clear().apply()
+    private fun request(account: Account?): AuthorizationRequest {
+        val builder = AuthorizationRequest.builder().setRequestedScopes(scopes)
+        if (account != null) builder.setAccount(account)
+        return builder.build()
     }
 
-    private suspend fun fetchUserInfo(accessToken: String) {
+    private suspend fun fetchEmail(accessToken: String): String? {
         val request = Request.Builder()
             .url(AppConfig.USER_INFO_ENDPOINT)
             .header("Authorization", "Bearer $accessToken")
             .get()
             .build()
-
-        val (_, userJson) = executeJson(request)
-        userEmail.value = userJson["email"]?.jsonPrimitive?.content
-    }
-
-    private suspend fun executeJson(request: Request): Pair<Int, kotlinx.serialization.json.JsonObject> {
-        val response = withContext(Dispatchers.IO) { client.newCall(request).execute() }
-        response.use { resp ->
-            val text = resp.body?.string() ?: ""
-            val parsed = if (text.isNotEmpty()) {
-                try {
-                    json.parseToJsonElement(text).jsonObject
-                } catch (e: Exception) {
-                    kotlinx.serialization.json.buildJsonObject { }
-                }
-            } else {
-                kotlinx.serialization.json.buildJsonObject { }
+        val text = withContext(Dispatchers.IO) {
+            client.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) throw IllegalStateException("User info request failed (${resp.code})")
+                resp.body?.string() ?: ""
             }
-            return Pair(resp.code, parsed)
         }
-    }
-
-    private fun randomUrlSafe(byteCount: Int): String {
-        val bytes = ByteArray(byteCount).also { SecureRandom().nextBytes(it) }
-        return Base64.encodeToString(
-            bytes,
-            Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
-        )
-    }
-
-    private fun base64UrlSha256(value: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
-        return Base64.encodeToString(
-            digest,
-            Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP
-        )
+        return json.parseToJsonElement(text).jsonObject["email"]?.jsonPrimitive?.content
     }
 
     private companion object {
         const val TAG = "GoogleAuthManager"
-        const val KEY_ACCESS_TOKEN = "accessToken"
-        const val KEY_REFRESH_TOKEN = "refreshToken"
-        const val KEY_TOKEN_EXPIRY = "tokenExpiry"
+        const val GOOGLE_ACCOUNT_TYPE = "com.google"
+        const val KEY_ACCOUNT_EMAIL = "accountEmail"
+        const val LEGACY_KEY_REFRESH_TOKEN = "refreshToken"
     }
 }

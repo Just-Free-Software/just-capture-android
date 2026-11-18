@@ -66,11 +66,15 @@ The recorder has an instrumented test that records on the device's camera
 
 ## Google Cloud setup
 
-- **Sign-in** reuses the iOS OAuth client ID in `config/AppConfig.kt`, with
-  the redirect URI `com.googleusercontent.apps.<client-id>:/oauthredirect`
-  handled by `AuthRedirectActivity`. If Google rejects that redirect from an
-  Android install, create an additional OAuth client in the same project and
-  update `GOOGLE_CLIENT_ID`/`REDIRECT_URI` plus the manifest's redirect scheme.
+- **Sign-in** uses Google Play services' `AuthorizationClient`, which matches
+  the app to an **Android** OAuth client by package name and signing
+  certificate, so there's no client ID in the code. The Cloud project needs an
+  Android OAuth client for `fyi.justfreesoftware.justcapture` for each key that
+  signs a build: your debug key (`./gradlew signingReport` prints its SHA-1),
+  your upload or release key, and, once the app is on Google Play, Play's app
+  signing key (Play Console → Test and release → App integrity). A build
+  signed with an unregistered key fails to sign in, and Logcat shows a
+  `DEVELOPER_ERROR` from `GoogleAuthManager`.
 - **Watch tab** reads shared folders anonymously with the API key in
   `AppConfig.DRIVE_API_KEY`. Requests send `X-Android-Package` and
   `X-Android-Cert`, so if the key is restricted to apps, add an Android
