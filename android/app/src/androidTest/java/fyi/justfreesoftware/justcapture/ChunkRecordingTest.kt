@@ -12,6 +12,9 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import fyi.justfreesoftware.justcapture.model.VideoChunk
 import fyi.justfreesoftware.justcapture.services.CameraManager
+import java.io.File
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.math.abs
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
@@ -20,9 +23,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.abs
 
 /**
  * Records for real on the device's camera: timed cuts, a manual cut and a
@@ -51,7 +51,12 @@ class ChunkRecordingTest {
         override val lifecycle: Lifecycle get() = registry
     }
 
-    private data class FileInfo(val videoSamples: Int, val firstIsSync: Boolean, val durationSec: Double, val hasAudio: Boolean)
+    private data class FileInfo(
+        val videoSamples: Int,
+        val firstIsSync: Boolean,
+        val durationSec: Double,
+        val hasAudio: Boolean
+    )
 
     private fun inspect(file: File): FileInfo {
         val extractor = MediaExtractor()
@@ -130,8 +135,12 @@ class ChunkRecordingTest {
             val fps = info.videoSamples / info.durationSec
             Log.i(
                 "ChunkRecordingTest",
-                "chunk ${chunk.index}: reported ${"%.3f".format(chunk.durationSec)} s, file ${"%.3f".format(info.durationSec)} s, " +
-                    "${info.videoSamples} frames (${"%.1f".format(fps)} fps), audio=${info.hasAudio}, ${file.length()} bytes"
+                "chunk ${chunk.index}: reported ${"%.3f".format(
+                    chunk.durationSec
+                )} s, file ${"%.3f".format(info.durationSec)} s, " +
+                    "${info.videoSamples} frames (${"%.1f".format(
+                        fps
+                    )} fps), audio=${info.hasAudio}, ${file.length()} bytes"
             )
             assertTrue("${file.name} doesn't start on a keyframe", info.firstIsSync)
             // The file holds every frame the recorder counted for it: no
@@ -143,6 +152,11 @@ class ChunkRecordingTest {
         }
         // Timed cuts land on the boundary, not a keyframe interval later.
         assertTrue("First chunk was ${chunks[0].durationSec} s", abs(chunks[0].durationSec - 5.0) < 0.3)
-        assertTrue("No partial files should remain", directory.listFiles().orEmpty().none { it.name.endsWith(".partial.mp4") })
+        assertTrue(
+            "No partial files should remain",
+            directory.listFiles().orEmpty().none {
+                it.name.endsWith(".partial.mp4")
+            }
+        )
     }
 }

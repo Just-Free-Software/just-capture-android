@@ -1,19 +1,26 @@
 package fyi.justfreesoftware.justcapture.ui.screens
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -27,6 +34,7 @@ import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -55,12 +63,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import fyi.justfreesoftware.justcapture.AppGraph
@@ -82,9 +93,13 @@ private sealed interface TestEmailState {
     data class Failed(val message: String) : TestEmailState
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * [scrollTarget] is set by another tab to scroll here to one setting;
+ * [onScrolledToTarget] clears it once shown.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
-fun SettingsScreen(graph: AppGraph) {
+fun SettingsScreen(graph: AppGraph, scrollTarget: SettingsSection? = null, onScrolledToTarget: () -> Unit = {}) {
     val context = LocalContext.current
     val settings = graph.settings
     val scope = rememberCoroutineScope()
@@ -102,8 +117,57 @@ fun SettingsScreen(graph: AppGraph) {
     var showSignOutConfirm by remember { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
 
+    // Addresses shown as chips, and the text still being typed. Together
+    // they are the saved recipients setting; see saveRecipients().
+    var committedRecipients by remember { mutableStateOf(EmailSettings.parseRecipients(settings.emailRecipients)) }
+    var recipientDraft by remember { mutableStateOf("") }
+    var recipientsFocused by remember { mutableStateOf(false) }
+
     val recipients = EmailSettings.parseRecipients(settings.emailRecipients)
-    val invalidRecipients = recipients.filterNot { EmailSettings.isValidEmail(it) }
+    val hasInvalidRecipient = recipients.any { !EmailSettings.isValidEmail(it) }
+
+    // Addresses to flag in the footer. What's still being typed is left out
+    // until the field loses focus, so a half-typed address isn't an error.
+    val typing = if (recipientsFocused) EmailSettings.parseRecipients(recipientDraft) else emptyList()
+    val invalidRecipients = recipients.filter { !EmailSettings.isValidEmail(it) && it !in typing }
+
+    // Writes the chips plus whatever is in the field to the stored setting.
+    // The half-typed text is included so an address still gets the email if
+    // the user never presses Done.
+    fun saveRecipients() {
+        settings.emailRecipients =
+            (committedRecipients + EmailSettings.parseRecipients(recipientDraft)).joinToString(", ")
+    }
+
+    // Turns each valid address in the field into a chip; anything else stays
+    // in the field to be fixed.
+    fun commitDraft() {
+        val rejected = mutableListOf<String>()
+        for (address in EmailSettings.parseRecipients(recipientDraft)) {
+            if (!EmailSettings.isValidEmail(address)) {
+                rejected += address
+            } else if (committedRecipients.none { it.equals(address, ignoreCase = true) }) {
+                committedRecipients = committedRecipients + address
+            }
+        }
+        recipientDraft = rejected.joinToString(", ")
+        saveRecipients()
+    }
+
+    val storageRequester = remember { BringIntoViewRequester() }
+    val locationRequester = remember { BringIntoViewRequester() }
+    LaunchedEffect(scrollTarget) {
+        val requester = when (scrollTarget) {
+            SettingsSection.STORAGE -> storageRequester
+            SettingsSection.LOCATION -> locationRequester
+            null -> return@LaunchedEffect
+        }
+        // The first time the tab is opened the screen hasn't been laid out
+        // yet, and scrolling before that does nothing.
+        delay(SCROLL_TO_TARGET_DELAY_MS)
+        requester.bringIntoView()
+        onScrolledToTarget()
+    }
     val isDeviceStorageLow = deviceFreeBytes?.let {
         DeviceStorage.isLow(it, graph.driveStorageManager.bytesPerSecondEstimate())
     } ?: false
@@ -158,21 +222,25 @@ fun SettingsScreen(graph: AppGraph) {
             }
         }
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
             // ---- Account ----
             Section(
                 header = "Account",
                 footer = if (publicSharingBlocked) {
                     {
                         FooterWarning(
-                            "This account doesn't allow public links, so the people you notify won't be able to open your " +
-                                "videos. This is usually a work or school account policy. Sign in with a personal " +
-                                "Google account instead."
+                            "This account doesn't allow public links, so the people you notify won't be able to open " +
+                                "your videos. This is usually a work or school account policy. Sign in with a " +
+                                "personal Google account instead."
                         )
                     }
-                } else null
+                } else {
+                    null
+                }
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
                     Avatar((userEmail ?: "?").take(1).uppercase())
                     Column(modifier = Modifier.weight(1f)) {
                         Text("Google Account", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Medium)
@@ -212,7 +280,11 @@ fun SettingsScreen(graph: AppGraph) {
                         ) { Text(label) }
                     }
                 }
-                SwitchRow("Save location", settings.includeLocationInEmail) { settings.includeLocationInEmail = it }
+                Box(Modifier.bringIntoViewRequester(locationRequester)) {
+                    SwitchRow("Save location", settings.includeLocationInEmail) {
+                        settings.includeLocationInEmail = it
+                    }
+                }
             }
 
             // ---- Email notifications ----
@@ -226,6 +298,7 @@ fun SettingsScreen(graph: AppGraph) {
                                 "${if (invalidRecipients.size == 1) "it doesn't" else "they don't"} look like an email address.",
                             AppColors.record
                         )
+
                         recipients.isEmpty() -> FooterText(
                             "Add people to email when you start recording, or turn off email notifications to dismiss this warning. Separate addresses with commas.",
                             AppColors.warning
@@ -236,15 +309,46 @@ fun SettingsScreen(graph: AppGraph) {
             ) {
                 SwitchRow("Email notifications", settings.emailAlertsEnabled) { settings.emailAlertsEnabled = it }
                 if (settings.emailAlertsEnabled) {
+                    if (committedRecipients.isNotEmpty()) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            committedRecipients.forEach { address ->
+                                RecipientChip(address, EmailSettings.isValidEmail(address)) {
+                                    committedRecipients = committedRecipients - address
+                                    saveRecipients()
+                                }
+                            }
+                        }
+                    }
                     OutlinedTextField(
-                        value = settings.emailRecipients,
-                        onValueChange = { settings.emailRecipients = it },
-                        label = { Text("Recipients") },
-                        placeholder = { Text("name@example.com, …") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, autoCorrectEnabled = false),
-                        modifier = Modifier.fillMaxWidth()
+                        value = recipientDraft,
+                        onValueChange = { draft ->
+                            recipientDraft = draft
+                            // A comma, space or pasted list finishes an address.
+                            if (draft.any { it in RECIPIENT_SEPARATORS }) commitDraft() else saveRecipients()
+                        },
+                        label = { Text("Add email address") },
+                        placeholder = { Text("name@example.com") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            autoCorrectEnabled = false,
+                            imeAction = ImeAction.Done
+                        ),
+                        // Stays in the field to add another.
+                        keyboardActions = KeyboardActions(onDone = { commitDraft() }),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { focus ->
+                                if (recipientsFocused && !focus.isFocused) commitDraft()
+                                recipientsFocused = focus.isFocused
+                            }
                     )
-                    val canTest = recipients.isNotEmpty() && invalidRecipients.isEmpty() && testEmailState != TestEmailState.Sending
+                    val canTest =
+                        recipients.isNotEmpty() && !hasInvalidRecipient &&
+                            testEmailState != TestEmailState.Sending
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -254,13 +358,34 @@ fun SettingsScreen(graph: AppGraph) {
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(18.dp))
-                        Text("Send Test Email", color = AppColors.accent, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = null,
+                            tint = AppColors.accent,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            "Send Test Email",
+                            color = AppColors.accent,
+                            fontSize = 16.sp,
+                            modifier = Modifier.weight(1f)
+                        )
                         when (val state = testEmailState) {
                             TestEmailState.Idle -> {}
-                            TestEmailState.Sending -> CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+
+                            TestEmailState.Sending -> CircularProgressIndicator(
+                                color = AppColors.accent,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp)
+                            )
+
                             TestEmailState.Sent -> StatusLabel("Sent", Icons.Filled.CheckCircle, AppColors.success)
-                            is TestEmailState.Failed -> StatusLabel(state.message, Icons.Filled.Warning, AppColors.record)
+
+                            is TestEmailState.Failed -> StatusLabel(
+                                state.message,
+                                Icons.Filled.Warning,
+                                AppColors.record
+                            )
                         }
                     }
                 }
@@ -305,14 +430,20 @@ fun SettingsScreen(graph: AppGraph) {
                     }
                 }
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.bringIntoViewRequester(storageRequester)
+                ) {
                     Text("Google Drive", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
                     val (text, color) = when (driveState) {
                         StorageState.OK, StorageState.LOW ->
                             (quota?.availableBytes?.let { "${Formatters.storageBytes(it)} free" } ?: "") to
                                 (if (driveState == StorageState.LOW) AppColors.warning else AppColors.secondaryText)
+
                         StorageState.OUT -> "Full" to AppColors.record
+
                         StorageState.UNLIMITED -> "Unlimited" to AppColors.secondaryText
+
                         StorageState.UNAVAILABLE -> "Unavailable" to AppColors.secondaryText
                     }
                     Text(text, color = color, fontSize = 16.sp)
@@ -343,7 +474,13 @@ fun SettingsScreen(graph: AppGraph) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Refresh Storage", color = AppColors.accent, fontSize = 16.sp, modifier = Modifier.weight(1f))
-                    if (isRefreshingStorage) CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                    if (isRefreshingStorage) {
+                        CircularProgressIndicator(
+                            color = AppColors.accent,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
                 deviceFreeBytes?.let { free ->
                     Divider()
@@ -421,7 +558,7 @@ private fun SettingsHelp() {
             HelpRow(Icons.AutoMirrored.Filled.Chat, "What it says",
                 "When you started, your message, and your location if it's on. Type [your_name] and it shows your name.")
             HelpRow(Icons.Filled.CloudOff, "If your Drive fills up",
-                "They get an email letting them know. Just Capture keeps trying, so if space is freed or someone adds " +
+                "They get an email when it's almost full, or once it's full. Just Capture keeps trying, so if space is freed or someone adds " +
                     "storage to your Google account, like whoever manages your family plan, the rest of your clips " +
                     "upload on their own. This works as long as your phone is on and the app hasn't been force-closed.")
         }
@@ -456,9 +593,62 @@ private fun HelpRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title
 
 private fun appVersion(context: android.content.Context): String {
     val info = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
+
     @Suppress("DEPRECATION")
-    val code = info?.let { if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else it.versionCode.toLong() } ?: 1
+    val code =
+        info?.let { if (android.os.Build.VERSION.SDK_INT >= 28) it.longVersionCode else it.versionCode.toLong() } ?: 1
     return "${info?.versionName ?: "1.0"} ($code)"
+}
+
+private const val SCROLL_TO_TARGET_DELAY_MS = 150L
+private const val RECIPIENT_SEPARATORS = ",; \n\t"
+
+/**
+ * One accepted notification address: a round initial, the address, and a
+ * button to remove it.
+ */
+@Composable
+private fun RecipientChip(address: String, isValid: Boolean, onRemove: () -> Unit) {
+    val color = if (isValid) AppColors.accent else AppColors.record
+    Row(
+        modifier = Modifier
+            .background(AppColors.surfaceRaised, CircleShape)
+            .border(1.dp, if (isValid) AppColors.stroke else AppColors.record.copy(alpha = 0.7f), CircleShape)
+            .padding(start = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .background(color, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                if (isValid) address.take(1).uppercase() else "!",
+                color = if (isValid) AppColors.onAccent else Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        // A long address is cut at the end, so who it is stays readable.
+        Text(
+            address,
+            color = Color.White,
+            fontSize = 14.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
+        IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Remove $address",
+                tint = AppColors.secondaryText,
+                modifier = Modifier.size(14.dp)
+            )
+        }
+    }
 }
 
 @Composable

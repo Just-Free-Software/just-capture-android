@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,13 +20,17 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayCircle
 import androidx.compose.material.icons.filled.SyncProblem
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -129,9 +134,18 @@ fun WatchScreen(graph: AppGraph) {
                             OutlinedTextField(
                                 value = linkText,
                                 onValueChange = { linkText = it },
-                                placeholder = { Text("drive.google.com/drive/folders/…", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                placeholder = {
+                                    Text(
+                                        "drive.google.com/drive/folders/…",
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
                                 singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go),
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Uri,
+                                    imeAction = ImeAction.Go
+                                ),
                                 keyboardActions = KeyboardActions(onGo = { openLink() }),
                                 modifier = Modifier.weight(1f)
                             )
@@ -140,7 +154,11 @@ fun WatchScreen(graph: AppGraph) {
                             }
                         }
                         if (linkText.isNotEmpty() && linkFolderId == null) {
-                            Text("That doesn't look like a Drive folder link.", color = AppColors.warning, fontSize = 12.sp)
+                            Text(
+                                "That doesn't look like a Drive folder link.",
+                                color = AppColors.warning,
+                                fontSize = 12.sp
+                            )
                         }
                         Button(
                             onClick = ::openLink,
@@ -166,7 +184,11 @@ fun WatchScreen(graph: AppGraph) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SectionHeader("Saved", Modifier.weight(1f))
                         if (isChecking) {
-                            CircularProgressIndicator(color = AppColors.accent, strokeWidth = 2.dp, modifier = Modifier.size(14.dp))
+                            CircularProgressIndicator(
+                                color = AppColors.accent,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(14.dp)
+                            )
                         }
                     }
                 }
@@ -191,7 +213,12 @@ fun WatchScreen(graph: AppGraph) {
                                     onLongClickLabel = "Delete folder"
                                 )
                         ) {
-                            DriveFolderRow(folder.name, subtitle(folder), folder.newClipCount)
+                            DriveFolderRow(
+                                folder.name,
+                                subtitle(folder),
+                                folder.newClipCount,
+                                onDelete = { folderToDelete = folder }
+                            )
                         }
                     }
                 }
@@ -239,9 +266,14 @@ private fun subtitle(folder: SharedFolder): String {
 
 /** List row for a Drive folder, with a badge when it has clips the phone doesn't. */
 @Composable
-private fun DriveFolderRow(title: String, subtitle: String, newClipCount: Int) {
+private fun DriveFolderRow(title: String, subtitle: String, newClipCount: Int, onDelete: () -> Unit) {
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.card(12.dp),
+        // Less padding at the end, where the menu button brings its own.
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppColors.surface, CardShape)
+            .padding(start = 12.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -251,7 +283,12 @@ private fun DriveFolderRow(title: String, subtitle: String, newClipCount: Int) {
                 .background(AppColors.accentContainer, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Folder, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(20.dp))
+            Icon(
+                Icons.Filled.Folder,
+                contentDescription = null,
+                tint = AppColors.accent,
+                modifier = Modifier.size(20.dp)
+            )
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
@@ -260,7 +297,27 @@ private fun DriveFolderRow(title: String, subtitle: String, newClipCount: Int) {
         if (newClipCount > 0) {
             StatusBadge("$newClipCount new", Icons.Filled.Download, AppColors.accent)
         } else {
-            Icon(Icons.Filled.PlayCircle, contentDescription = null, tint = AppColors.accent, modifier = Modifier.size(28.dp))
+            Icon(
+                Icons.Filled.PlayCircle,
+                contentDescription = null,
+                tint = AppColors.accent,
+                modifier = Modifier.size(28.dp)
+            )
+        }
+        Box {
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Filled.MoreVert, contentDescription = "More", tint = AppColors.secondaryText)
+            }
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(
+                    text = { Text("Delete from This Phone", color = AppColors.record) },
+                    leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = AppColors.record) },
+                    onClick = {
+                        menuOpen = false
+                        onDelete()
+                    }
+                )
+            }
         }
     }
 }

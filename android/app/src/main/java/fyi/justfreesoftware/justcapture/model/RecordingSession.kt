@@ -1,10 +1,10 @@
 package fyi.justfreesoftware.justcapture.model
 
-import kotlinx.serialization.Serializable
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import kotlinx.serialization.Serializable
 
 @Serializable
 enum class UploadStatus {
@@ -24,7 +24,14 @@ data class VideoChunk(
     val fileSizeBytes: Long = 0,
     val status: UploadStatus = UploadStatus.PENDING,
     val uploadProgress: Double = 0.0,
-    val driveFileId: String? = null
+    val driveFileId: String? = null,
+    /**
+     * Drive's resumable upload link for this clip. Kept so a retry can pick up
+     * the same upload instead of starting another.
+     */
+    val uploadSessionUrl: String? = null,
+    /** Failed tries while online since the last success or manual retry. */
+    val uploadAttempts: Int = 0
 ) {
     val fileName: String
         get() = localPath.substringAfterLast('/')
@@ -127,9 +134,11 @@ data class RecordingSession(
         get() = "Session $id"
 
     /** Records where the recording started. Does nothing once the trail has begun. */
-    fun addingStartToTrail(fix: Fix, nowMs: Long): RecordingSession =
-        if (locationTrail != null) this
-        else copy(locationTrail = listOf(LocationPoint.from(fix, clipFileName = null, nowMs = nowMs)))
+    fun addingStartToTrail(fix: Fix, nowMs: Long): RecordingSession = if (locationTrail != null) {
+        this
+    } else {
+        copy(locationTrail = listOf(LocationPoint.from(fix, clipFileName = null, nowMs = nowMs)))
+    }
 
     /** Records where the phone was when a clip ended; a null fix means it isn't known. */
     fun addingClipToTrail(fix: Fix?, clipFileName: String, nowMs: Long): RecordingSession {
@@ -157,7 +166,10 @@ data class RecordingSession(
                     LocationPoint.mapUrl(latitude, longitude)
             }
             for (point in trail) {
-                val fields = mutableListOf(formatter.format(Date(point.epochMs)), point.clipFileName ?: "recording start")
+                val fields = mutableListOf(
+                    formatter.format(Date(point.epochMs)),
+                    point.clipFileName ?: "recording start"
+                )
                 if (point.latitude != null && point.longitude != null) {
                     if (point.isLastKnown == true) fields += "last known position"
                     fields += LocationPoint.coordinates(point.latitude, point.longitude)

@@ -10,7 +10,8 @@ import kotlin.math.min
  */
 object RetryPolicy {
     const val INITIAL_DELAY_SEC = 5.0
-    const val MAX_DELAY_SEC = 1200.0      // 20 minutes
+    const val MAX_DELAY_SEC = 1200.0 // 20 minutes
+    const val MAX_DELAY_MS = 1_200_000L
     const val FACTOR = 2.0
     const val MAX_ATTEMPTS = 10
 

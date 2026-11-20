@@ -26,7 +26,10 @@ class LocationTrailTest {
 
     @Test
     fun `start is recorded once`() {
-        val trail = session.addingStartToTrail(fix, start).addingStartToTrail(fix.copy(latitude = 1.0), start).locationTrail!!
+        val trail = session.addingStartToTrail(
+            fix,
+            start
+        ).addingStartToTrail(fix.copy(latitude = 1.0), start).locationTrail!!
         assertEquals(1, trail.size)
         assertEquals(42.36, trail[0].latitude!!, 0.0)
         assertNull(trail[0].clipFileName)
@@ -43,7 +46,12 @@ class LocationTrailTest {
         val lines = text.lines()
         assertTrue(lines[0].startsWith("Recording started: "))
         assertEquals("Location trail (oldest first):", lines[2])
-        assertTrue(lines[3], lines[3].endsWith("| recording start | 42.360000, -71.058000 | within 12 m | https://www.google.com/maps?q=42.360000,-71.058000"))
+        assertTrue(
+            lines[3],
+            lines[3].endsWith(
+                "| recording start | 42.360000, -71.058000 | within 12 m | https://www.google.com/maps?q=42.360000,-71.058000"
+            )
+        )
         assertFalse(lines[4], lines[4].contains("last known"))
         assertTrue(lines[5], lines[5].contains("| chunk_1.mp4 | last known position | 42.360000"))
         assertTrue(lines[6], lines[6].endsWith("| chunk_2.mp4 | no location available"))

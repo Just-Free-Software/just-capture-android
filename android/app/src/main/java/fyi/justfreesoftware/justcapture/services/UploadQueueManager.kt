@@ -7,6 +7,8 @@ import fyi.justfreesoftware.justcapture.model.RecordingSession
 import fyi.justfreesoftware.justcapture.model.UploadStatus
 import fyi.justfreesoftware.justcapture.model.VideoChunk
 import fyi.justfreesoftware.justcapture.util.RetryPolicy
+import java.io.File
+import kotlin.math.ceil
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -23,13 +25,13 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import java.io.File
-import kotlin.math.ceil
 
 /**
  * Upload queue for video chunks. Each chunk uploads with exponential-backoff
- * retries; a Drive quota exhaustion parks the chunk and polls the (cheap)
- * quota endpoint with growing backoff until space is freed, then retries.
+ * retries, continuing the same Drive upload where it left off; a Drive quota
+ * exhaustion parks the chunk and polls the (cheap) quota endpoint with growing
+ * backoff until the chunk fits, then retries. Being offline doesn't use up a
+ * chunk's retries.
  *
  * All bookkeeping maps are touched only from [scope], which runs on the main
  * thread, so they need no locking.
@@ -37,6 +39,7 @@ import kotlin.math.ceil
 class UploadQueueManager(
     private val sessionStore: SessionStore,
     private val authManager: GoogleAuthManager,
+    private val network: NetworkMonitor,
     private val scope: CoroutineScope
 ) {
     /**
@@ -61,6 +64,17 @@ class UploadQueueManager(
     var onChunkUploaded: ((VideoChunk) -> Unit)? = null
 
     private val uploadTasks = mutableMapOf<String, Job>()
+
+    /** Sessions with a [prepareFolder] loop running, so repeated calls don't each start their own. */
+    private val folderPreparers = mutableSetOf<String>()
+
+    /**
+     * Every clip waiting on storage re-checks on its own timer, so they share
+     * one quota request per [SHARED_QUOTA_CHECK_INTERVAL_MS]. A long backlog
+     * would otherwise send a request per clip.
+     */
+    private var lastQuotaCheck: Pair<Long, Long?>? = null
+    private var quotaCheckTask: Deferred<Long?>? = null
 
     /**
      * One in-flight Drive folder creation per session. Without this, the
@@ -174,6 +188,23 @@ class UploadQueueManager(
     /** Clears per-account state when the user signs out. */
     fun resetAccountState() {
         _publicSharingBlocked.value = false
+        lastQuotaCheck = null
+    }
+
+    /**
+     * Free Drive space (null means unlimited), from a recent check if there
+     * is one. Failed checks aren't remembered, so the caller sees the error.
+     */
+    private suspend fun sharedAvailableBytes(): Long? {
+        lastQuotaCheck?.let { (checkedAtMs, available) ->
+            if (System.currentTimeMillis() - checkedAtMs < SHARED_QUOTA_CHECK_INTERVAL_MS) return available
+        }
+        val task = quotaCheckTask?.takeIf { it.isActive } ?: scope.async {
+            val available = GoogleDriveService.getStorageQuota(authManager.validAccessToken()).availableBytes
+            lastQuotaCheck = System.currentTimeMillis() to available
+            available
+        }.also { quotaCheckTask = it }
+        return task.await()
     }
 
     /**
@@ -182,23 +213,35 @@ class UploadQueueManager(
      * first chunk upload will try again.
      */
     fun prepareFolder(sessionId: String) {
+        if (sessionStore.session(sessionId)?.driveFolderId != null || !folderPreparers.add(sessionId)) return
         scope.launch {
-            var attempt = 0
-            while (sessionStore.session(sessionId)?.let { it.driveFolderId == null } == true) {
-                try {
-                    ensureFolder(sessionId)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    attempt += 1
-                    if (attempt >= RetryPolicy.MAX_ATTEMPTS) {
-                        Log.e(TAG, "Failed to create Drive folder after $attempt attempts: ${e.message}")
-                        return@launch
+            try {
+                var attempt = 0
+                while (sessionStore.session(sessionId)?.let { it.driveFolderId == null } == true) {
+                    try {
+                        ensureFolder(sessionId)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (network.isOffline(e)) {
+                            network.waitForRestoredConnection(RetryPolicy.MAX_DELAY_MS)
+                            continue
+                        }
+                        attempt += 1
+                        if (attempt >= RetryPolicy.MAX_ATTEMPTS) {
+                            Log.e(TAG, "Failed to create Drive folder after $attempt attempts: ${e.message}")
+                            return@launch
+                        }
+                        val delaySec = RetryPolicy.delayForAttempt(attempt)
+                        Log.w(
+                            TAG,
+                            "Drive folder attempt $attempt failed, retrying in ${delaySec.toInt()}s: ${e.message}"
+                        )
+                        network.waitForRestoredConnection((delaySec * 1000).toLong())
                     }
-                    val delaySec = RetryPolicy.delayForAttempt(attempt)
-                    Log.w(TAG, "Drive folder attempt $attempt failed, retrying in ${delaySec.toInt()}s: ${e.message}")
-                    delay((delaySec * 1000).toLong())
                 }
+            } finally {
+                folderPreparers.remove(sessionId)
             }
         }
     }
@@ -209,24 +252,19 @@ class UploadQueueManager(
             it.copy(status = UploadStatus.PENDING, uploadProgress = 0.0)
         }
         uploadTasks[chunkId] = scope.launch {
-            var attempt = 0
             var quotaAttempt = 0
             while (true) {
                 val chunk = sessionStore.session(sessionId)?.chunks?.firstOrNull { it.id == chunkId } ?: return@launch
                 try {
-                    val fileId = uploadSlots.withPermit {
-                        sessionStore.updateChunkInMemory(sessionId, chunkId) { it.copy(status = UploadStatus.UPLOADING) }
-                        val folderId = ensureFolder(sessionId)
-                        val token = authManager.validAccessToken()
-                        GoogleDriveService.uploadFile(File(chunk.localPath), chunk.fileName, folderId, token) { progress ->
-                            scope.launch {
-                                sessionStore.updateChunkInMemory(sessionId, chunkId) { it.copy(uploadProgress = progress) }
-                            }
-                        }
-                    }
-
+                    val fileId = uploadSlots.withPermit { upload(sessionId, chunk) }
                     sessionStore.updateChunk(sessionId, chunkId) {
-                        it.copy(status = UploadStatus.UPLOADED, driveFileId = fileId, uploadProgress = 1.0)
+                        it.copy(
+                            status = UploadStatus.UPLOADED,
+                            driveFileId = fileId,
+                            uploadProgress = 1.0,
+                            uploadSessionUrl = null,
+                            uploadAttempts = 0
+                        )
                     }
                     storageExceeded.value = false
                     onChunkUploaded?.invoke(chunk)
@@ -246,44 +284,102 @@ class UploadQueueManager(
                     }
                     storageExceeded.value = true
                     quotaAttempt += 1
-                    val delaySec = storageRetryDelay(quotaAttempt)
-                    Log.w(TAG, "Chunk ${chunk.index + 1} can't upload: Drive is full. Re-checking in ${delaySec.toInt() / 60} min.")
-                    while (true) {
-                        delay((delaySec * 1000).toLong())
-                        try {
-                            val quota = GoogleDriveService.getStorageQuota(authManager.validAccessToken())
-                            // null availableBytes = unlimited quota, always uploadable
-                            if ((quota.availableBytes ?: Long.MAX_VALUE) > 0) break
-                        } catch (e2: CancellationException) {
-                            throw e2
-                        } catch (e2: Exception) {
-                            // Couldn't read the quota (e.g. offline) — let the
-                            // upload attempt itself surface the real error.
-                            break
-                        }
-                    }
+                    waitForStorage(chunk, storageRetryDelay(quotaAttempt))
                 } catch (e: Exception) {
-                    attempt += 1
-                    if (attempt >= RetryPolicy.MAX_ATTEMPTS) {
-                        sessionStore.updateChunk(sessionId, chunkId) {
-                            it.copy(status = UploadStatus.FAILED, uploadProgress = 0.0)
+                    if (network.isOffline(e)) {
+                        // Doesn't use up a try.
+                        sessionStore.updateChunkInMemory(sessionId, chunkId) {
+                            it.copy(status = UploadStatus.PENDING, uploadProgress = 0.0)
                         }
+                        Log.i(TAG, "Chunk ${chunk.index + 1} is waiting for a connection.")
+                        network.waitForRestoredConnection(RetryPolicy.MAX_DELAY_MS)
+                        continue
+                    }
+                    // Saved, so a clip that keeps failing across launches still runs out of tries.
+                    val attempt = chunk.uploadAttempts + 1
+                    val failed = attempt >= RetryPolicy.MAX_ATTEMPTS
+                    sessionStore.updateChunk(sessionId, chunkId) {
+                        it.copy(
+                            status = if (failed) UploadStatus.FAILED else UploadStatus.PENDING,
+                            uploadProgress = 0.0,
+                            uploadAttempts = attempt
+                        )
+                    }
+                    if (failed) {
                         Log.e(TAG, "Chunk ${chunk.index + 1} failed after $attempt attempts: ${e.message}")
                         uploadTasks.remove(chunkId)
                         return@launch
                     }
-                    sessionStore.updateChunkInMemory(sessionId, chunkId) {
-                        it.copy(status = UploadStatus.PENDING, uploadProgress = 0.0)
-                    }
                     val delaySec = RetryPolicy.delayForAttempt(attempt)
-                    Log.w(TAG, "Upload attempt $attempt for chunk ${chunk.index + 1} failed, retrying in ${delaySec.toInt()}s: ${e.message}")
-                    delay((delaySec * 1000).toLong())
+                    Log.w(
+                        TAG,
+                        "Upload attempt $attempt for chunk ${chunk.index + 1} failed, retrying in ${delaySec.toInt()}s: ${e.message}"
+                    )
+                    network.waitForRestoredConnection((delaySec * 1000).toLong())
                 }
             }
         }
     }
 
-    fun retryChunk(sessionId: String, chunkId: String) = enqueue(sessionId, chunkId)
+    /**
+     * Sends one clip, continuing an earlier upload of it if Drive still has
+     * one. Returns the file's id, which may come straight from Drive if the
+     * whole clip had already arrived.
+     */
+    private suspend fun upload(sessionId: String, chunk: VideoChunk): String {
+        sessionStore.updateChunkInMemory(sessionId, chunk.id) { it.copy(status = UploadStatus.UPLOADING) }
+        val folderId = ensureFolder(sessionId)
+        val file = File(chunk.localPath)
+        val fileSize = file.length()
+
+        var offset = 0L
+        var sessionUrl = chunk.uploadSessionUrl
+        if (sessionUrl != null) {
+            when (val state = GoogleDriveService.resumableUploadState(sessionUrl, fileSize)) {
+                is GoogleDriveService.ResumableUploadState.Complete -> return state.fileId
+                is GoogleDriveService.ResumableUploadState.Incomplete -> offset = state.nextOffset
+                GoogleDriveService.ResumableUploadState.Expired -> sessionUrl = null
+            }
+        }
+        val uploadUrl = sessionUrl ?: GoogleDriveService.createUploadSession(
+            chunk.fileName,
+            fileSize,
+            folderId,
+            authManager.validAccessToken()
+        ).also { created ->
+            sessionStore.updateChunk(sessionId, chunk.id) { it.copy(uploadSessionUrl = created) }
+        }
+        return GoogleDriveService.uploadFile(file, uploadUrl, offset) { progress ->
+            scope.launch {
+                sessionStore.updateChunkInMemory(sessionId, chunk.id) { it.copy(uploadProgress = progress) }
+            }
+        }
+    }
+
+    /** Waits, re-checking Drive every [delaySec], until the clip fits or the quota can't be read. */
+    private suspend fun waitForStorage(chunk: VideoChunk, delaySec: Double) {
+        Log.w(TAG, "Chunk ${chunk.index + 1} can't upload: Drive is full. Re-checking in ${delaySec.toInt() / 60} min.")
+        while (true) {
+            delay((delaySec * 1000).toLong())
+            try {
+                // null = unlimited quota, always uploadable. Wait until this
+                // clip fits: a clip that can't fit would only be rejected again.
+                if ((sharedAvailableBytes() ?: Long.MAX_VALUE) >= maxOf(chunk.fileSizeBytes, 1L)) return
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Couldn't read the quota (e.g. offline) — let the upload
+                // attempt itself surface the real error.
+                Log.w(TAG, "Couldn't check Drive storage: ${e.message}")
+                return
+            }
+        }
+    }
+
+    fun retryChunk(sessionId: String, chunkId: String) {
+        sessionStore.updateChunkInMemory(sessionId, chunkId) { it.copy(uploadAttempts = 0) }
+        enqueue(sessionId, chunkId)
+    }
 
     /** Cancels every in-flight upload belonging to a session, e.g. before deleting it. */
     fun cancelUploads(sessionId: String) {
@@ -294,21 +390,19 @@ class UploadQueueManager(
     }
 
     /**
-     * Re-enqueues every chunk that wasn't confirmed uploaded, so a kill
-     * mid-outage doesn't strand uploads. PENDING/UPLOADING chunks whose file
-     * is gone are marked FAILED so the user sees the truth.
+     * Sweeps up every chunk that wasn't confirmed uploaded and isn't being
+     * worked on, so a kill or outage can't strand it. PENDING/UPLOADING chunks
+     * whose file is gone are marked FAILED so the user sees the truth.
+     * [retryFailed] also gives clips that ran out of tries a fresh set, and
+     * retries location files. The caller limits how often that happens.
      */
-    suspend fun resumePendingUploads() {
+    suspend fun resumePendingUploads(retryFailed: Boolean) {
         for (session in sessionStore.sessions.value) {
-            for (chunk in session.chunks) {
-                if (chunk.status == UploadStatus.UPLOADED || chunk.id in uploadTasks) continue
-                if (File(chunk.localPath).exists()) {
-                    enqueue(session.id, chunk.id)
-                } else if (chunk.status == UploadStatus.PENDING || chunk.status == UploadStatus.UPLOADING) {
-                    sessionStore.updateChunk(session.id, chunk.id) { it.copy(status = UploadStatus.FAILED) }
-                }
-            }
+            session.chunks
+                .filter { it.status != UploadStatus.UPLOADED && uploadTasks[it.id]?.isActive != true }
+                .forEach { resume(session.id, it, retryFailed) }
         }
+        if (!retryFailed) return
         // Clips may all be up already, leaving nothing else to retry this.
         for (session in sessionStore.sessions.value) {
             if (session.locationText != session.uploadedLocationText) {
@@ -316,6 +410,29 @@ class UploadQueueManager(
             }
         }
     }
+
+    private suspend fun resume(sessionId: String, chunk: VideoChunk, retryFailed: Boolean) {
+        val wasFailed = chunk.status == UploadStatus.FAILED
+        if (!File(chunk.localPath).exists()) {
+            if (!wasFailed) {
+                sessionStore.updateChunk(sessionId, chunk.id) { it.copy(status = UploadStatus.FAILED) }
+            }
+        } else if (!wasFailed) {
+            enqueue(sessionId, chunk.id)
+        } else if (retryFailed) {
+            retryChunk(sessionId, chunk.id)
+        }
+    }
+
+    /** Uploads are running or waiting to retry. */
+    val hasActiveWork: Boolean
+        get() = uploadTasks.values.any { it.isActive }
+
+    /** Clips not yet on Drive that this phone still has. */
+    val hasUnfinishedClips: Boolean
+        get() = sessionStore.sessions.value.any { session ->
+            session.chunks.any { it.status != UploadStatus.UPLOADED && File(it.localPath).exists() }
+        }
 
     /**
      * Rewrites the session's playlist on Drive. Calls for the same session
@@ -410,11 +527,12 @@ class UploadQueueManager(
         private const val TAG = "UploadQueueManager"
 
         // Backoff for re-checking Drive after the quota is exhausted: a few
-        // minutes first, then doubling up to a generous cap (quota checks are
-        // cheap; freeing space typically requires the user to act).
+        // minutes first, then doubling up to a cap, so clips start uploading
+        // soon after someone frees up space.
         const val STORAGE_RETRY_INITIAL_DELAY_SEC = 5 * 60.0
-        const val STORAGE_RETRY_MAX_DELAY_SEC = 24 * 60 * 60.0
+        const val STORAGE_RETRY_MAX_DELAY_SEC = 15 * 60.0
         const val STORAGE_RETRY_FACTOR = 2.0
+        const val SHARED_QUOTA_CHECK_INTERVAL_MS = 5 * 60_000L
 
         fun storageRetryDelay(quotaAttempt: Int): Double {
             var delay = STORAGE_RETRY_INITIAL_DELAY_SEC

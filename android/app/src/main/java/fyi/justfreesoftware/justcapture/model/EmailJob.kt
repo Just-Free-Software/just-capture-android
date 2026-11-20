@@ -19,11 +19,6 @@ data class EmailJob(
     val subject: String,
     val bodyNote: String,
     /**
-     * Always true for new jobs since the start-time switch was removed; kept
-     * so jobs queued by older builds with it off still send as asked.
-     */
-    val includeTime: Boolean,
-    /**
      * When true and no coordinates were known at enqueue time, the queue
      * fills them in from a fresh fix right before sending.
      */

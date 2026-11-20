@@ -2,6 +2,7 @@ package fyi.justfreesoftware.justcapture.services
 
 import android.content.Context
 import android.util.Log
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,7 +12,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /** A folder someone else shared by link, saved for replay on this phone. */
 @Serializable
@@ -40,7 +40,10 @@ data class SharedFolder(
  * ends the whole run.
  */
 class SharedFolderStore(private val context: Context) {
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
     private val storageFile = File(context.filesDir, "shared-folders.json")
 
     private val _folders = MutableStateFlow<List<SharedFolder>>(emptyList())
@@ -74,13 +77,16 @@ class SharedFolderStore(private val context: Context) {
         val existing = _folders.value.firstOrNull { it.id == downloader.folderId }
         _folders.value = if (existing != null) {
             _folders.value.map {
-                if (it.id != downloader.folderId) it
-                else it.copy(
-                    name = name,
-                    downloadedClipIds = downloaded,
-                    remoteClipIds = remote ?: it.remoteClipIds,
-                    lastCheckedAtMs = if (remote != null) downloader.lastCheckedAtMs else it.lastCheckedAtMs
-                )
+                if (it.id != downloader.folderId) {
+                    it
+                } else {
+                    it.copy(
+                        name = name,
+                        downloadedClipIds = downloaded,
+                        remoteClipIds = remote ?: it.remoteClipIds,
+                        lastCheckedAtMs = if (remote != null) downloader.lastCheckedAtMs else it.lastCheckedAtMs
+                    )
+                }
             }
         } else {
             listOf(
@@ -121,10 +127,19 @@ class SharedFolderStore(private val context: Context) {
             }
             for (folder in due) {
                 try {
-                    val files = GoogleDriveService.listFilesInFolder(folder.id, access = GoogleDriveService.ReadAccess.PublicLink)
+                    val files = GoogleDriveService.listFilesInFolder(
+                        folder.id,
+                        access = GoogleDriveService.ReadAccess.PublicLink
+                    )
                     val clipIds = files.filter { it.name.endsWith(".mp4") }.map { it.id }
                     _folders.value = _folders.value.map {
-                        if (it.id == folder.id) it.copy(remoteClipIds = clipIds, lastCheckedAtMs = System.currentTimeMillis()) else it
+                        if (it.id ==
+                            folder.id
+                        ) {
+                            it.copy(remoteClipIds = clipIds, lastCheckedAtMs = System.currentTimeMillis())
+                        } else {
+                            it
+                        }
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -133,7 +148,9 @@ class SharedFolderStore(private val context: Context) {
                     // These would fail the same way for every other folder.
                     if (e is DriveException.RateLimited || e is DriveException.ApiKeyMissing ||
                         e is DriveException.ApiKeyRejected
-                    ) break
+                    ) {
+                        break
+                    }
                 } catch (e: Exception) {
                     // Usually offline; every other folder would fail the same way.
                     _checkError.value = e.message ?: "Couldn't reach Google Drive."

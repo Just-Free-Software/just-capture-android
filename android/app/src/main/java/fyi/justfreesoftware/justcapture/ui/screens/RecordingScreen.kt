@@ -11,17 +11,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.wrapContentHeight
-import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.fadeIn
 import androidx.compose.foundation.border
-import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,6 +28,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -42,7 +38,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
@@ -74,6 +74,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -82,6 +83,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -101,9 +104,9 @@ import fyi.justfreesoftware.justcapture.services.DriveStorageManager.StorageStat
 import fyi.justfreesoftware.justcapture.startRecording
 import fyi.justfreesoftware.justcapture.ui.components.PulseIndicator
 import fyi.justfreesoftware.justcapture.ui.theme.AppColors
-import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeBanner
 import fyi.justfreesoftware.justcapture.ui.theme.NoticeStyle
+import fyi.justfreesoftware.justcapture.ui.theme.TabularNumbers
 import fyi.justfreesoftware.justcapture.ui.theme.overlayPill
 import fyi.justfreesoftware.justcapture.util.DeviceStorage
 import fyi.justfreesoftware.justcapture.util.Formatters
@@ -117,14 +120,17 @@ private const val TAIL_WIDTH = 22
 fun openAppSettings(context: Context) {
     runCatching {
         context.startActivity(
-            Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+            Intent(
+                AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null)
+            )
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         )
     }
 }
 
 @Composable
-fun RecordingScreen(graph: AppGraph) {
+fun RecordingScreen(graph: AppGraph, openSettings: (SettingsSection) -> Unit = {}) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -158,10 +164,23 @@ fun RecordingScreen(graph: AppGraph) {
     LaunchedEffect(Unit) {
         val locationPermissions = if (settings.includeLocationInEmail) {
             listOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        } else emptyList()
-        val needed = (listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO) + locationPermissions).filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
-        if (needed.isNotEmpty()) permissionLauncher.launch(needed.toTypedArray())
-        else location.permissionAsked = true
+        } else {
+            emptyList()
+        }
+        val needed = (
+            listOf(
+                Manifest.permission.CAMERA,
+                Manifest.permission.RECORD_AUDIO
+            ) + locationPermissions
+            ).filter {
+            ContextCompat.checkSelfPermission(context, it) !=
+                PackageManager.PERMISSION_GRANTED
+        }
+        if (needed.isNotEmpty()) {
+            permissionLauncher.launch(needed.toTypedArray())
+        } else {
+            location.permissionAsked = true
+        }
     }
 
     LaunchedEffect(cameraPermissionGranted) {
@@ -190,7 +209,13 @@ fun RecordingScreen(graph: AppGraph) {
     var showLowStorageConfirm by remember { mutableStateOf(false) }
     var showOutOfStorageAlert by remember { mutableStateOf(false) }
 
-    val recipientCount = if (settings.emailAlertsEnabled) EmailSettings.parseRecipients(settings.emailRecipients).size else 0
+    val recipientCount = if (settings.emailAlertsEnabled) {
+        EmailSettings.parseRecipients(
+            settings.emailRecipients
+        ).size
+    } else {
+        0
+    }
     val liveSession = sessions.firstOrNull { it.isActive }?.takeIf { camera.isRecording }
     val liveEmailJob = liveSession?.let { live -> emailJobs.firstOrNull { it.sessionId == live.id } }
     val isDeviceStorageLow = deviceFreeBytes?.let {
@@ -254,7 +279,9 @@ fun RecordingScreen(graph: AppGraph) {
                     Row(
                         modifier = Modifier
                             .overlayPill()
-                            .semantics { contentDescription = "Recording, ${Formatters.duration(camera.elapsedTimeSec)}" },
+                            .semantics {
+                                contentDescription = "Recording, ${Formatters.duration(camera.elapsedTimeSec)}"
+                            },
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
@@ -277,11 +304,14 @@ fun RecordingScreen(graph: AppGraph) {
                 ReadinessPills(
                     recipientCount = recipientCount,
                     alertsEnabled = settings.emailAlertsEnabled,
+                    chunkSeconds = settings.chunkDurationSec.toInt(),
                     driveState = driveState,
                     driveAvailable = quota?.availableBytes,
+                    deviceFree = deviceFreeBytes,
                     deviceLow = isDeviceStorageLow,
                     savesLocation = settings.includeLocationInEmail,
-                    locationOn = location.permissionGranted
+                    locationOn = location.permissionGranted,
+                    openSettings = openSettings
                 )
             }
 
@@ -299,7 +329,8 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.ERROR,
                         icon = Icons.Filled.VideocamOff,
                         title = "Recording stopped",
-                        message = "$error Clips recorded so far are saved on this phone, and the app will keep trying to upload them.",
+                        message = "$error Clips recorded so far are saved on this phone, and the app will keep " +
+                            "trying to upload them.",
                         onDismiss = { camera.recordingError = null }
                     )
                 }
@@ -308,7 +339,8 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.WARNING,
                         icon = Icons.Filled.CloudOff,
                         title = "Google Drive is full",
-                        message = "Clips are kept on this phone, and the app will try uploading them again once you free up space."
+                        message = "Clips are kept on this phone, and the app will try uploading them again once " +
+                            "you free up space."
                     )
                 }
                 val free = deviceFreeBytes
@@ -320,8 +352,9 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.WARNING,
                         icon = Icons.Filled.PhoneAndroid,
                         title = "Phone storage is low",
-                        message = "${Formatters.storageBytes(free)} free, about $minutes of recording. Clips are kept on " +
-                            "this phone, so delete old sessions in My Clips to free up space."
+                        message =
+                            "${Formatters.storageBytes(free)} free, about $minutes of recording. Clips are kept on " +
+                                "this phone, so delete old sessions in My Clips to free up space."
                     )
                 }
                 if (publicSharingBlocked && recipientCount > 0) {
@@ -329,11 +362,14 @@ fun RecordingScreen(graph: AppGraph) {
                         style = NoticeStyle.WARNING,
                         icon = Icons.Filled.LinkOff,
                         title = "Contacts can't open your videos",
-                        message = "Your Google account (likely work or school) doesn't allow public links, so notification " +
-                            "emails will link to a private folder. Sign in with a personal Google account to fix this."
+                        message =
+                            "Your Google account (likely work or school) doesn't allow public links, so notification " +
+                                "emails will link to a private folder. Sign in with a personal Google account to fix this."
                     )
                 }
-                if (!camera.isRecording && settings.includeLocationInEmail && !location.permissionGranted && location.permissionAsked) {
+                if (!camera.isRecording && settings.includeLocationInEmail && !location.permissionGranted &&
+                    location.permissionAsked
+                ) {
                     NoticeBanner(
                         style = NoticeStyle.INFO,
                         icon = Icons.Filled.LocationOff,
@@ -395,61 +431,144 @@ private fun lowStorageMessage(graph: AppGraph): String {
     return "$message If it fills up mid-recording, new clips can't be uploaded."
 }
 
+/**
+ * What a recording started now would have to work with: Drive space, phone
+ * space and whether location will be saved, each opening its setting, then
+ * the clip length and who gets emailed.
+ */
 @Composable
 private fun ReadinessPills(
     recipientCount: Int,
     alertsEnabled: Boolean,
+    chunkSeconds: Int,
     driveState: StorageState,
     driveAvailable: Long?,
+    deviceFree: Long?,
     deviceLow: Boolean,
     savesLocation: Boolean,
-    locationOn: Boolean
+    locationOn: Boolean,
+    openSettings: (SettingsSection) -> Unit
 ) {
-    Row(
+    // Free Drive space as a short "12 GB"; the pill's color carries low and full.
+    val driveText = when (driveState) {
+        StorageState.OK, StorageState.LOW -> driveAvailable?.let { Formatters.shortGigabytes(it) } ?: "–"
+        StorageState.OUT -> "0 GB"
+        StorageState.UNLIMITED -> "∞"
+        StorageState.UNAVAILABLE -> "–"
+    }
+    val driveLabel = when (driveState) {
+        StorageState.OK -> "Google Drive, $driveText free"
+        StorageState.LOW -> "Google Drive is low, $driveText free"
+        StorageState.OUT -> "Google Drive is full"
+        StorageState.UNLIMITED -> "Google Drive, unlimited storage"
+        StorageState.UNAVAILABLE -> "Google Drive storage unknown"
+    }
+    val driveColor = when (driveState) {
+        StorageState.LOW -> AppColors.warning
+        StorageState.OUT -> AppColors.record
+        else -> Color.White
+    }
+    val deviceText = deviceFree?.let { Formatters.shortGigabytes(it) } ?: "–"
+    val deviceLabel = when {
+        deviceFree == null -> "Phone storage unknown"
+        deviceLow -> "Phone storage is low, $deviceText free"
+        else -> "Phone, $deviceText free"
+    }
+    val locationWillBeSaved = savesLocation && locationOn
+
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        if (recipientCount > 0) {
-            ReadinessPill(Icons.Filled.Email, "$recipientCount contact${if (recipientCount == 1) "" else "s"}", Color.White)
-        } else if (alertsEnabled) {
-            ReadinessPill(Icons.Filled.Email, "Add contacts to notify", AppColors.warning)
-        } else {
-            // Switched off on purpose, so not a warning.
-            ReadinessPill(Icons.Filled.Email, "Notifications off", AppColors.secondaryText)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReadinessPill(
+                icon = if (driveState == StorageState.OUT) Icons.Filled.CloudOff else Icons.Filled.Cloud,
+                text = driveText,
+                color = driveColor,
+                label = driveLabel,
+                onClick = { openSettings(SettingsSection.STORAGE) }
+            )
+            ReadinessPill(
+                icon = Icons.Filled.PhoneAndroid,
+                text = deviceText,
+                color = if (deviceLow) AppColors.warning else Color.White,
+                label = deviceLabel,
+                onClick = { openSettings(SettingsSection.STORAGE) }
+            )
+            ReadinessPill(
+                icon = Icons.Filled.LocationOn,
+                trailingIcon = if (locationWillBeSaved) Icons.Filled.Check else Icons.Filled.Close,
+                // Red only when the setting is on but the permission is
+                // missing; switched off on purpose isn't a problem.
+                color = when {
+                    locationWillBeSaved -> Color.White
+                    savesLocation -> AppColors.record
+                    else -> AppColors.secondaryText
+                },
+                label = when {
+                    locationWillBeSaved -> "Location will be saved"
+                    savesLocation -> "Location permission is off"
+                    else -> "Location won't be saved"
+                },
+                onClick = { openSettings(SettingsSection.LOCATION) }
+            )
         }
-        val (driveText, driveColor) = when (driveState) {
-            StorageState.OK -> (driveAvailable?.let { Formatters.storageBytes(it) } ?: "Drive") to Color.White
-            StorageState.LOW -> "Drive low" to AppColors.warning
-            StorageState.OUT -> "Drive full" to AppColors.record
-            StorageState.UNLIMITED -> "Unlimited" to Color.White
-            StorageState.UNAVAILABLE -> "Drive" to Color.White
-        }
-        ReadinessPill(
-            if (driveState == StorageState.OUT) Icons.Filled.CloudOff else Icons.Filled.Cloud,
-            driveText,
-            driveColor
-        )
-        if (deviceLow) ReadinessPill(Icons.Filled.PhoneAndroid, "Phone low", AppColors.warning)
-        if (!savesLocation) {
-            // The user's choice, so not shown as a problem.
-            ReadinessPill(Icons.Filled.LocationOff, "No location", Color.White)
-        } else if (locationOn) {
-            ReadinessPill(Icons.Filled.LocationOn, "Location", Color.White)
-        } else {
-            ReadinessPill(Icons.Filled.LocationOff, "No location", AppColors.record)
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                "Recording in $chunkSeconds-second clips",
+                color = AppColors.secondaryText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                when {
+                    recipientCount > 0 -> "Ready to email $recipientCount contact${if (recipientCount == 1) "" else "s"}"
+                    alertsEnabled -> "Add contacts to notify"
+                    else -> "Notifications off"
+                },
+                // Yellow only when notifications are on with nobody to send
+                // to; switching them off is a choice.
+                color = if (recipientCount == 0 && alertsEnabled) AppColors.warning else AppColors.secondaryText,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
         }
     }
 }
 
 @Composable
-private fun ReadinessPill(icon: ImageVector, text: String, color: Color) {
+private fun ReadinessPill(
+    icon: ImageVector,
+    color: Color,
+    label: String,
+    onClick: () -> Unit,
+    text: String? = null,
+    trailingIcon: ImageVector? = null
+) {
     Row(
-        modifier = Modifier.overlayPill(),
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .clickable(onClickLabel = "Open this setting", role = Role.Button, onClick = onClick)
+            .overlayPill()
+            .clearAndSetSemantics { contentDescription = label },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp)
     ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
-        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        if (text != null) {
+            Text(
+                text,
+                color = color,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                style = TabularNumbers
+            )
+        }
+        if (trailingIcon != null) {
+            Icon(trailingIcon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
+        }
     }
 }
 
@@ -485,11 +604,7 @@ private fun UploadPill(session: RecordingSession, storageExceeded: Boolean) {
 }
 
 @Composable
-private fun BottomControls(
-    graph: AppGraph,
-    cameraUnavailable: Boolean,
-    onToggleRecording: () -> Unit
-) {
+private fun BottomControls(graph: AppGraph, cameraUnavailable: Boolean, onToggleRecording: () -> Unit) {
     val camera = graph.cameraManager
     val settings = graph.settings
     var tipDismissed by remember { mutableStateOf(false) }
@@ -536,25 +651,12 @@ private fun BottomControls(
                 tint = if (camera.isRecording) AppColors.accent else Color.White,
                 label = if (camera.isRecording) {
                     "Send clip now. Ends clip ${camera.currentChunkIndex + 1} early and starts uploading it"
-                } else "Send clip now, available while recording",
+                } else {
+                    "Send clip now, available while recording"
+                },
                 enabled = camera.isRecording,
                 onClick = camera::cutChunkNow
             )
-            // Directly above the record button, inset so it can't run into
-            // the send button. Hidden while recording to keep the view clear.
-            if (!camera.isRecording) {
-                Text(
-                    "Recording in ${settings.chunkDurationSec.toInt()}-second clips",
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .align(Alignment.Center)
-                        .padding(horizontal = (CONTROL_SIZE + 8).dp)
-                )
-            }
         }
 
         Row(
@@ -617,8 +719,8 @@ private fun SendClipTip(
                 )
             }
             Text(
-                "While recording, tap this to end the current clip early and start uploading it right away, instead of " +
-                    "waiting for the $chunkSeconds-second clip to finish.",
+                "While recording, tap this to end the current clip early and start uploading it right away, " +
+                    "instead of waiting for the $chunkSeconds-second clip to finish.",
                 color = AppColors.secondaryText,
                 fontSize = 12.sp
             )
@@ -664,14 +766,25 @@ private fun SendClipTip(
 @Composable
 private fun EmailStatusLine(job: EmailJob) {
     val (text, icon, color) = when (job.status) {
-        EmailStatus.SENT -> Triple("Notification sent to ${job.recipients.size}", Icons.Filled.CheckCircle, AppColors.success)
+        EmailStatus.SENT -> Triple(
+            "Notification sent to ${job.recipients.size}",
+            Icons.Filled.CheckCircle,
+            AppColors.success
+        )
+
         EmailStatus.SENDING -> Triple("Sending notification…", Icons.AutoMirrored.Filled.Send, Color.White)
+
         EmailStatus.PENDING -> Triple(
             if (job.attempts == 0) "Notification queued" else "Notification retrying (no connection?)",
             Icons.Filled.Schedule,
             AppColors.warning
         )
-        EmailStatus.FAILED -> Triple("Notification failed — retry from My Clips", Icons.Filled.Warning, AppColors.record)
+
+        EmailStatus.FAILED -> Triple(
+            "Notification failed — retry from My Clips",
+            Icons.Filled.Warning,
+            AppColors.record
+        )
     }
     Row(
         modifier = Modifier.overlayPill(),
@@ -679,7 +792,14 @@ private fun EmailStatusLine(job: EmailJob) {
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(14.dp))
-        Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(
+            text,
+            color = color,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -729,7 +849,12 @@ private fun CameraPermissionPlaceholder(modifier: Modifier, onOpenSettings: () -
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Icon(Icons.Filled.CameraAlt, contentDescription = null, tint = AppColors.secondaryText, modifier = Modifier.size(44.dp))
+        Icon(
+            Icons.Filled.CameraAlt,
+            contentDescription = null,
+            tint = AppColors.secondaryText,
+            modifier = Modifier.size(44.dp)
+        )
         Text("Camera access needed", color = Color.White, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         Text(
             "Just Capture needs the camera and microphone to record. You can turn them on in Settings.",

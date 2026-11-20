@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.location.Location
+import android.location.LocationManager as SystemLocationManager
 import android.location.provider.ProviderProperties
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
@@ -26,7 +27,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import android.location.LocationManager as SystemLocationManager
 
 /** Drives LocationManager through the real system service with mock providers. */
 @RunWith(AndroidJUnit4::class)
@@ -85,13 +85,16 @@ class LocationTrackingTest {
     }
 
     private fun send(provider: String, latitude: Double, accuracy: Float) {
-        system.setTestProviderLocation(provider, Location(provider).apply {
-            this.latitude = latitude
-            longitude = -71.0
-            this.accuracy = accuracy
-            time = System.currentTimeMillis()
-            elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
-        })
+        system.setTestProviderLocation(
+            provider,
+            Location(provider).apply {
+                this.latitude = latitude
+                longitude = -71.0
+                this.accuracy = accuracy
+                time = System.currentTimeMillis()
+                elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+            }
+        )
     }
 
     private fun onMain(block: () -> Unit) = instrumentation.runOnMainSync(block)

@@ -5,13 +5,13 @@ import android.media.MediaMetadataRetriever
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import java.io.File
 
 /**
  * Downloads a session folder from Google Drive (the user's own, or one
@@ -31,7 +31,14 @@ import java.io.File
 class DriveSessionDownloader(
     context: Context,
     val folderId: String,
-    val source: Source
+    val source: Source,
+    /** The session's clips recorded on this phone, which play from where they are. */
+    private val localClips: List<LocalClip> = emptyList(),
+    /**
+     * For the user's own sessions, where the phone that recorded it already
+     * has what `location.txt` would say.
+     */
+    initialLocationText: String? = null
 ) {
     enum class Source {
         /** A folder this app uploaded, read as the signed-in user. */
@@ -55,8 +62,24 @@ class DriveSessionDownloader(
     @Serializable
     data class Segment(val fileId: String, val fileName: String, val size: Long? = null)
 
+    /**
+     * A clip of the user's own session that this phone recorded and may
+     * still have, so it can be played without downloading it back.
+     */
+    data class LocalClip(
+        /** Null until the clip has been uploaded. */
+        val fileId: String?,
+        val file: File,
+        val size: Long
+    )
+
     @Serializable
-    private data class Manifest(val folderName: String? = null, val segments: List<Segment> = emptyList())
+    private data class Manifest(
+        val folderName: String? = null,
+        val segments: List<Segment> = emptyList(),
+        /** The folder's `location.txt`, kept so it shows without the network. */
+        val locationText: String? = null
+    )
 
     var sync by mutableStateOf<SyncState>(SyncState.Idle)
         private set
@@ -91,6 +114,10 @@ class DriveSessionDownloader(
     var skippedClips by mutableStateOf(0)
         private set
 
+    /** Contents of the folder's `location.txt`, if it has one. */
+    var locationText by mutableStateOf(initialLocationText)
+        private set
+
     val directory: File = directory(context, folderId, source)
     private val manifestFile = File(directory, "manifest.json")
 
@@ -98,6 +125,7 @@ class DriveSessionDownloader(
         loadManifest(manifestFile)?.let {
             segments = it.segments
             folderName = it.folderName
+            if (locationText == null) locationText = it.locationText
         }
     }
 
@@ -125,16 +153,15 @@ class DriveSessionDownloader(
          * Pulls Drive file ids out of the playlist's
          * `https://www.googleapis.com/drive/v3/files/<id>?alt=media` entries.
          */
-        fun segmentFileIds(playlist: String): List<String> =
-            playlist.lineSequence()
-                .map { it.trim() }
-                .filter { it.isNotEmpty() && !it.startsWith("#") }
-                .mapNotNull { line ->
-                    val path = line.substringBefore('?').split('/')
-                    val index = path.lastIndexOf("files")
-                    path.getOrNull(index + 1)?.takeIf { index >= 0 && it.isNotEmpty() }
-                }
-                .toList()
+        fun segmentFileIds(playlist: String): List<String> = playlist.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .mapNotNull { line ->
+                val path = line.substringBefore('?').split('/')
+                val index = path.lastIndexOf("files")
+                path.getOrNull(index + 1)?.takeIf { index >= 0 && it.isNotEmpty() }
+            }
+            .toList()
 
         private fun chunkIndex(name: String): Int =
             name.dropWhile { !it.isDigit() }.takeWhile { it.isDigit() }.toIntOrNull() ?: Int.MAX_VALUE
@@ -143,21 +170,58 @@ class DriveSessionDownloader(
     private suspend fun saveManifest() = withContext(Dispatchers.IO) {
         directory.mkdirs()
         val tmp = File(directory, "manifest.json.tmp")
-        tmp.writeText(json.encodeToString(Manifest(folderName, segments)))
+        tmp.writeText(json.encodeToString(Manifest(folderName, segments, locationText)))
         tmp.renameTo(manifestFile)
         // A copy of the playlist next to the clips, pointing at the local
         // files, so the downloaded folder is self-describing.
-        File(directory, "playlist.m3u8").writeText(buildString {
-            append("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n")
-            segments.forEach { append("#EXTINF:0,\n${it.fileName}\n") }
-            append("#EXT-X-ENDLIST\n")
-        })
+        File(directory, "playlist.m3u8").writeText(
+            buildString {
+                append("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n")
+                segments.forEach { append("#EXTINF:0,\n${it.fileName}\n") }
+                append("#EXT-X-ENDLIST\n")
+            }
+        )
+    }
+
+    // ---- Clips recorded on this phone ----
+
+    /**
+     * True when every clip of the session is still on this phone, so Drive
+     * can't have anything this phone lacks.
+     */
+    val hasAllClipsLocally: Boolean
+        get() = localClips.isNotEmpty() && localClips.all { it.file.exists() }
+
+    /** The recorded file for a segment, if this phone still has it. */
+    private fun localFile(segment: Segment): File? {
+        val clip = localClips.firstOrNull { it.fileId == segment.fileId }
+            ?: localClips.firstOrNull { it.file.name == segment.fileName }
+        return clip?.file?.takeIf { it.exists() }
+    }
+
+    /** Where a segment plays from: the recording if it's here, otherwise the copy downloaded from Drive. */
+    private fun playbackFile(segment: Segment): File = localFile(segment) ?: File(directory, segment.fileName)
+
+    /** Adds the recorded clips that [list] doesn't have yet, which includes clips that haven't been uploaded. */
+    private fun includingLocalClips(list: List<Segment>): List<Segment> {
+        val ids = list.map { it.fileId }.toSet()
+        val names = list.map { it.fileName }.toSet()
+        val extra = localClips
+            .filter { it.file.exists() && it.fileId !in ids && it.file.name !in names }
+            .map { Segment(it.fileId ?: "local:${it.file.name}", it.file.name, it.size) }
+        if (extra.isEmpty()) return list
+        val merged = list + extra
+        // Recorded clips are named chunk_N.mp4; put them back in order. If
+        // any name doesn't fit that, leave Drive's order alone.
+        if (merged.any { chunkIndex(it.fileName) == Int.MAX_VALUE }) return merged
+        return merged.sortedBy { chunkIndex(it.fileName) }
     }
 
     // ---- Playback ----
 
     /** Builds the playable list from clips already on the phone. No network. */
     suspend fun loadSaved() {
+        segments = withContext(Dispatchers.IO) { includingLocalClips(segments) }
         if (segments.isNotEmpty()) rebuildPlayable()
     }
 
@@ -167,7 +231,7 @@ class DriveSessionDownloader(
      */
     private suspend fun rebuildPlayable() {
         val (readable, skipped) = withContext(Dispatchers.IO) {
-            val files = segments.map { File(directory, it.fileName) }.filter { it.exists() }
+            val files = segments.map { playbackFile(it) }.filter { it.exists() }
             val ok = files.filter { isReadableVideo(it) }
             ok to (files.size - ok.size)
         }
@@ -205,7 +269,9 @@ class DriveSessionDownloader(
         sync = SyncState.Checking
         sync = try {
             resolveFolderName(authManager)
-            recordRemote(GoogleDriveService.listFilesInFolder(folderId, access = access(authManager)))
+            val files = GoogleDriveService.listFilesInFolder(folderId, access = access(authManager))
+            recordRemote(files)
+            refreshLocation(files, authManager)
             SyncState.Idle
         } catch (e: CancellationException) {
             sync = SyncState.Idle
@@ -242,15 +308,16 @@ class DriveSessionDownloader(
                 GoogleDriveService.downloadFile(segment.fileId, destination, access(authManager))
                 downloadedBytes += segment.size ?: destination.length()
                 // Saved per clip, so an interrupted sync keeps what it got.
-                segments = ordered.filter { isAlreadyDownloaded(it) }
+                segments = includingLocalClips(ordered.filter { isAlreadyDownloaded(it) })
                 saveManifest()
             }
-            segments = ordered.filter { isAlreadyDownloaded(it) }
+            segments = includingLocalClips(ordered.filter { isAlreadyDownloaded(it) })
             saveManifest()
             newClipIds = emptyList()
 
             sync = SyncState.Preparing
             rebuildPlayable()
+            refreshLocation(files, authManager)
             sync = SyncState.Idle
         } catch (e: CancellationException) {
             sync = SyncState.Idle
@@ -270,11 +337,35 @@ class DriveSessionDownloader(
     }
 
     private fun recordRemote(files: List<DriveFile>) {
-        val clipIds = files.filter { it.name.endsWith(".mp4") }.map { it.id }
+        val clips = files.filter { it.name.endsWith(".mp4") }
         val downloaded = segments.map { it.fileId }.toSet()
-        remoteClipIds = clipIds
-        newClipIds = clipIds.filterNot { it in downloaded }
+        remoteClipIds = clips.map { it.id }
+        // A clip uploaded since this was opened is on Drive under an id the
+        // phone hasn't seen, but its recording is still here.
+        newClipIds = clips
+            .filterNot { it.id in downloaded || localFile(Segment(it.id, it.name, it.size)) != null }
+            .map { it.id }
         lastCheckedAtMs = System.currentTimeMillis()
+    }
+
+    /**
+     * Fetches the folder's `location.txt`: one request per sync, and only
+     * when the listing shows the file. It's the last request of a sync and a
+     * failure is ignored, so a rate limit here isn't followed by anything.
+     */
+    private suspend fun refreshLocation(files: List<DriveFile>, authManager: GoogleAuthManager) {
+        val file = files.firstOrNull { it.name == "location.txt" } ?: return
+        val text = try {
+            GoogleDriveService.downloadText(file.id, access(authManager))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return
+        }
+        if (text == locationText) return
+        locationText = text
+        // With no clips yet there's no saved folder to keep it in.
+        if (segments.isNotEmpty()) runCatching { saveManifest() }
     }
 
     /**
@@ -304,6 +395,7 @@ class DriveSessionDownloader(
     }
 
     private fun isAlreadyDownloaded(segment: Segment): Boolean {
+        if (localFile(segment) != null) return true
         val file = File(directory, segment.fileName)
         if (!file.exists()) return false
         return segment.size == null || file.length() == segment.size

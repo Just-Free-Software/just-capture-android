@@ -8,8 +8,8 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
-import android.media.audiofx.AutomaticGainControl
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -18,8 +18,8 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Surface
 import java.io.File
-import java.nio.ByteOrder
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.abs
 
 /** A chunk file the recorder has finished with, successfully or not. */
@@ -200,21 +200,24 @@ class ChunkRecorder(
         }
         val codec = MediaCodec.createEncoderByType(VIDEO_MIME)
         videoCodec = codec
-        codec.setCallback(object : MediaCodec.Callback() {
-            override fun onInputBufferAvailable(codec: MediaCodec, index: Int) = Unit
+        codec.setCallback(
+            object : MediaCodec.Callback() {
+                override fun onInputBufferAvailable(codec: MediaCodec, index: Int) = Unit
 
-            override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-                handleVideoOutput(codec, index, info)
-            }
+                override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+                    handleVideoOutput(codec, index, info)
+                }
 
-            override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                fail("The video encoder stopped: ${e.diagnosticInfo}")
-            }
+                override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
+                    fail("The video encoder stopped: ${e.diagnosticInfo}")
+                }
 
-            override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
-                videoFormat = format
-            }
-        }, muxHandler)
+                override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
+                    videoFormat = format
+                }
+            },
+            muxHandler
+        )
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         val surface = codec.createInputSurface()
         inputSurface = surface
@@ -256,7 +259,9 @@ class ChunkRecorder(
         Log.i(TAG, "Mic opened: ${if (isStereo) "stereo" else "mono"}, $sampleRate Hz")
         audioGainControl = if (AutomaticGainControl.isAvailable()) {
             runCatching { AutomaticGainControl.create(record.audioSessionId)?.apply { enabled = true } }.getOrNull()
-        } else null
+        } else {
+            null
+        }
         Log.i(TAG, "Automatic gain control: ${if (audioGainControl?.enabled == true) "on" else "not available"}")
         audioRecord = record
 
@@ -278,74 +283,97 @@ class ChunkRecorder(
         val stereo = ShortArray(AUDIO_SAMPLES_PER_FRAME * 2)
         val downmixer = StereoDownmixer()
 
-        codec.setCallback(object : MediaCodec.Callback() {
-            override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
-                val buffer = runCatching { codec.getInputBuffer(index) }.getOrNull() ?: return
-                if (stopAudio) {
-                    runCatching {
-                        codec.queueInputBuffer(index, 0, 0, maxOf(lastPtsUs + 1, 0), MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+        codec.setCallback(
+            object : MediaCodec.Callback() {
+                override fun onInputBufferAvailable(codec: MediaCodec, index: Int) {
+                    val buffer = runCatching { codec.getInputBuffer(index) }.getOrNull() ?: return
+                    if (stopAudio) {
+                        runCatching {
+                            codec.queueInputBuffer(
+                                index,
+                                0,
+                                0,
+                                maxOf(lastPtsUs + 1, 0),
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                        }
+                        return
                     }
-                    return
-                }
-                buffer.clear()
-                // Blocks for about one AAC frame, which paces the loop.
-                val wanted = minOf(buffer.capacity(), pcmBytesPerRead) / 2
-                val frames = if (isStereo) {
-                    val read = record.read(stereo, 0, wanted * 2)
-                    if (read > 0 && downmixer.mix(stereo, read / 2, mono)) {
-                        Log.i(TAG, "Mic mix: ${downmixer.mode} (L ${"%.0f".format(downmixer.leftLevelDb)} dB, R ${"%.0f".format(downmixer.rightLevelDb)} dB)")
+                    buffer.clear()
+                    // Blocks for about one AAC frame, which paces the loop.
+                    val wanted = minOf(buffer.capacity(), pcmBytesPerRead) / 2
+                    val frames = if (isStereo) {
+                        val read = record.read(stereo, 0, wanted * 2)
+                        if (read > 0 && downmixer.mix(stereo, read / 2, mono)) {
+                            Log.i(
+                                TAG,
+                                "Mic mix: ${downmixer.mode} (L ${"%.0f".format(
+                                    downmixer.leftLevelDb
+                                )} dB, R ${"%.0f".format(downmixer.rightLevelDb)} dB)"
+                            )
+                        }
+                        if (read > 0) read / 2 else read
+                    } else {
+                        record.read(mono, 0, wanted)
                     }
-                    if (read > 0) read / 2 else read
-                } else {
-                    record.read(mono, 0, wanted)
+                    if (frames <= 0) {
+                        runCatching { codec.queueInputBuffer(index, 0, 0, maxOf(lastPtsUs + 1, 0), 0) }
+                        return
+                    }
+                    buffer.order(ByteOrder.nativeOrder()).asShortBuffer().put(mono, 0, frames)
+                    val read = frames * 2
+                    // Timestamp of this read's first frame on the monotonic clock,
+                    // from the HAL's own record of when frames were captured.
+                    var ptsUs = if (record.getTimestamp(timestamp, AudioTimestamp.TIMEBASE_MONOTONIC) ==
+                        AudioRecord.SUCCESS
+                    ) {
+                        (timestamp.nanoTime + (framesRead - timestamp.framePosition) * 1_000_000_000L / sampleRate) /
+                            1000
+                    } else {
+                        System.nanoTime() / 1000 - frames * 1_000_000L / sampleRate
+                    }
+                    if (ptsUs <= lastPtsUs) ptsUs = lastPtsUs + 1
+                    lastPtsUs = ptsUs
+                    framesRead += frames
+                    runCatching { codec.queueInputBuffer(index, 0, read, ptsUs, 0) }
                 }
-                if (frames <= 0) {
-                    runCatching { codec.queueInputBuffer(index, 0, 0, maxOf(lastPtsUs + 1, 0), 0) }
-                    return
-                }
-                buffer.order(ByteOrder.nativeOrder()).asShortBuffer().put(mono, 0, frames)
-                val read = frames * 2
-                // Timestamp of this read's first frame on the monotonic clock,
-                // from the HAL's own record of when frames were captured.
-                var ptsUs = if (record.getTimestamp(timestamp, AudioTimestamp.TIMEBASE_MONOTONIC) == AudioRecord.SUCCESS) {
-                    (timestamp.nanoTime + (framesRead - timestamp.framePosition) * 1_000_000_000L / sampleRate) / 1000
-                } else {
-                    System.nanoTime() / 1000 - frames * 1_000_000L / sampleRate
-                }
-                if (ptsUs <= lastPtsUs) ptsUs = lastPtsUs + 1
-                lastPtsUs = ptsUs
-                framesRead += frames
-                runCatching { codec.queueInputBuffer(index, 0, read, ptsUs, 0) }
-            }
 
-            override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
-                val isConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
-                val isEos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
-                var sample: AudioSample? = null
-                if (!isConfig && info.size > 0) {
-                    val buffer = codec.getOutputBuffer(index)
-                    if (buffer != null) {
-                        val bytes = ByteArray(info.size)
-                        buffer.position(info.offset)
-                        buffer.get(bytes, 0, info.size)
-                        sample = AudioSample(info.presentationTimeUs, frameDurationUs, bytes, info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv())
+                override fun onOutputBufferAvailable(codec: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
+                    val isConfig = info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0
+                    val isEos = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                    var sample: AudioSample? = null
+                    if (!isConfig && info.size > 0) {
+                        val buffer = codec.getOutputBuffer(index)
+                        if (buffer != null) {
+                            val bytes = ByteArray(info.size)
+                            buffer.position(info.offset)
+                            buffer.get(bytes, 0, info.size)
+                            sample =
+                                AudioSample(
+                                    info.presentationTimeUs,
+                                    frameDurationUs,
+                                    bytes,
+                                    info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM.inv()
+                                )
+                        }
+                    }
+                    runCatching { codec.releaseOutputBuffer(index, false) }
+                    muxHandler.post {
+                        sample?.let { handleAudioSample(it) }
+                        if (isEos) handleAudioEos()
                     }
                 }
-                runCatching { codec.releaseOutputBuffer(index, false) }
-                muxHandler.post {
-                    sample?.let { handleAudioSample(it) }
-                    if (isEos) handleAudioEos()
+
+                override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
+                    fail("The audio encoder stopped: ${e.diagnosticInfo}")
                 }
-            }
 
-            override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
-                fail("The audio encoder stopped: ${e.diagnosticInfo}")
-            }
-
-            override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
-                muxHandler.post { audioFormat = format }
-            }
-        }, audioHandler)
+                override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
+                    muxHandler.post { audioFormat = format }
+                }
+            },
+            audioHandler
+        )
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         record.startRecording()
         codec.start()
@@ -423,7 +451,10 @@ class ChunkRecorder(
                 val waitingForAudio = recordAudio && audioFormat == null && !audioDone &&
                     System.nanoTime() / 1000 - startedAtUs < AUDIO_FORMAT_WAIT_US
                 if (!isKey || videoFormat == null || waitingForAudio) {
-                    Log.d(TAG, "Holding first frame: key=$isKey format=${videoFormat != null} waitingForAudio=$waitingForAudio lagMs=${(System.nanoTime() / 1000 - ptsUs) / 1000}")
+                    Log.d(
+                        TAG,
+                        "Holding first frame: key=$isKey format=${videoFormat != null} waitingForAudio=$waitingForAudio lagMs=${(System.nanoTime() / 1000 - ptsUs) / 1000}"
+                    )
                     requestSyncFrame()
                     return
                 }
@@ -432,7 +463,12 @@ class ChunkRecorder(
                 val elapsed = ptsUs - segment.startUs
                 if (!cutRequested && elapsed >= chunkDurationUs - SYNC_LEAD_US) requestSyncFrame()
                 if ((cutRequested || elapsed >= chunkDurationUs) && isKey) {
-                    Log.d(TAG, "Cut chunk ${segment.index + 1} at ${"%.3f".format(elapsed / 1e6)} s (${if (cutRequested) "manual" else "timed"})")
+                    Log.d(
+                        TAG,
+                        "Cut chunk ${segment.index + 1} at ${"%.3f".format(
+                            elapsed / 1e6
+                        )} s (${if (cutRequested) "manual" else "timed"})"
+                    )
                     cutRequested = false
                     cut(segment, ptsUs)
                     segment = startSegment(ptsUs)
@@ -523,7 +559,10 @@ class ChunkRecorder(
             for (sample in recentAudio) {
                 if (sample.ptsUs >= startUs) write(sample, segment)
             }
-            Log.d(TAG, "Chunk ${index + 1} started at ${startUs / 1000} ms (monotonic), frame lag ${(System.nanoTime() / 1000 - startUs) / 1000} ms, since start() ${(System.nanoTime() / 1000 - startedAtUs) / 1000} ms")
+            Log.d(
+                TAG,
+                "Chunk ${index + 1} started at ${startUs / 1000} ms (monotonic), frame lag ${(System.nanoTime() / 1000 - startUs) / 1000} ms, since start() ${(System.nanoTime() / 1000 - startedAtUs) / 1000} ms"
+            )
             mainHandler.post { listener.onChunkStarted(index) }
             return segment
         } catch (e: Exception) {
@@ -567,7 +606,12 @@ class ChunkRecorder(
         val end = segment.endUs ?: (segment.lastVideoUs + frameDurationUs)
         val durationSec = maxOf((end - segment.startUs) / 1_000_000.0, 0.01)
         if (segment.lateFrames > 0) {
-            Log.w(TAG, "Chunk ${segment.index + 1} (${"%.2f".format(durationSec)} s): ${segment.lateFrames} gaps longer than a frame")
+            Log.w(
+                TAG,
+                "Chunk ${segment.index + 1} (${"%.2f".format(
+                    durationSec
+                )} s): ${segment.lateFrames} gaps longer than a frame"
+            )
         }
         val finalFile = File(outputDirectory, "chunk_${segment.index}.mp4")
         val result = try {

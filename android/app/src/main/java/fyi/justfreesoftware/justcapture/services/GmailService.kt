@@ -5,6 +5,8 @@ import android.util.Base64
 import android.util.Log
 import fyi.justfreesoftware.justcapture.config.AppConfig
 import fyi.justfreesoftware.justcapture.util.Formatters
+import java.io.IOException
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
@@ -13,8 +15,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 /**
  * Sends the alert email through the Gmail API (messages/send with a raw MIME
@@ -88,12 +88,11 @@ object GmailService {
         }
     }
 
-    private fun escapeHtml(text: String): String =
-        text.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("\n", "<br>")
+    private fun escapeHtml(text: String): String = text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("\n", "<br>")
 
     private fun buildEmailHtml(
         subject: String,
@@ -126,14 +125,18 @@ object GmailService {
             "{{MAP_LINK_SECTION}}",
             if (latitude != null && longitude != null) {
                 "<p><a href=\"https://www.google.com/maps?q=$latitude,$longitude\">View location on Google Maps</a></p>"
-            } else ""
+            } else {
+                ""
+            }
         )
 
         html = html.replace(
             "{{DRIVE_LINK_SECTION}}",
             if (!driveFolderLink.isNullOrEmpty()) {
                 "<p><a href=\"${escapeHtml(driveFolderLink)}\">View the live recording on Google Drive</a></p>"
-            } else ""
+            } else {
+                ""
+            }
         )
 
         html = html.replace(

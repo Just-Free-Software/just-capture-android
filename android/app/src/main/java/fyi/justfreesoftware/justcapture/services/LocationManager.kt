@@ -8,6 +8,7 @@ import android.location.Address
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationListener
+import android.location.LocationManager as SystemLocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
@@ -20,12 +21,11 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import fyi.justfreesoftware.justcapture.model.Fix
 import fyi.justfreesoftware.justcapture.model.LocationPoint
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.Locale
-import android.location.LocationManager as SystemLocationManager
 
 /**
  * Location for recordings and emails: one-shot requests before recording, and
@@ -160,7 +160,13 @@ class LocationManager(
         // mid-recording, its fixes start arriving without registering again.
         for (provider in permittedProviders(manager)) {
             try {
-                manager.requestLocationUpdates(provider, TRACKING_INTERVAL_MS, 0f, trackingListener, Looper.getMainLooper())
+                manager.requestLocationUpdates(
+                    provider,
+                    TRACKING_INTERVAL_MS,
+                    0f,
+                    trackingListener,
+                    Looper.getMainLooper()
+                )
             } catch (e: Exception) {
                 Log.w(TAG, "Couldn't track location with $provider: ${e.message}")
             }
@@ -182,7 +188,11 @@ class LocationManager(
 
             for (provider in providers) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    manager.getCurrentLocation(provider, CancellationSignal(), ContextCompat.getMainExecutor(context)) { location ->
+                    manager.getCurrentLocation(
+                        provider,
+                        CancellationSignal(),
+                        ContextCompat.getMainExecutor(context)
+                    ) { location ->
                         location?.let { onLocation(it) }
                     }
                 } else {
@@ -265,7 +275,10 @@ class LocationManager(
             val place = withContext(Dispatchers.IO) {
                 try {
                     @Suppress("DEPRECATION")
-                    Geocoder(context, Locale.getDefault()).getFromLocation(fix.latitude, fix.longitude, 1)?.firstOrNull()
+                    Geocoder(
+                        context,
+                        Locale.getDefault()
+                    ).getFromLocation(fix.latitude, fix.longitude, 1)?.firstOrNull()
                 } catch (e: Exception) {
                     null
                 }

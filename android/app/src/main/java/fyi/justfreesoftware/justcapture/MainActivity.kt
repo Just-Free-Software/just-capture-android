@@ -2,8 +2,8 @@ package fyi.justfreesoftware.justcapture
 
 import android.graphics.Color
 import android.os.Bundle
-import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import fyi.justfreesoftware.justcapture.ui.JustCaptureApp

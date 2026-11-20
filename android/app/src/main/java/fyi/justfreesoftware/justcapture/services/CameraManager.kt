@@ -10,6 +10,7 @@ import android.hardware.camera2.CameraAccessException
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager as SystemCameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
@@ -34,14 +35,13 @@ import fyi.justfreesoftware.justcapture.config.AppConfig
 import fyi.justfreesoftware.justcapture.model.VideoChunk
 import fyi.justfreesoftware.justcapture.services.recording.ChunkRecorder
 import fyi.justfreesoftware.justcapture.services.recording.RecordedChunk
+import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.io.File
-import java.util.UUID
-import android.hardware.camera2.CameraManager as SystemCameraManager
 
 /**
  * Camera preview + gapless chunked recording on Camera2. While recording,
@@ -55,10 +55,7 @@ import android.hardware.camera2.CameraManager as SystemCameraManager
  * Camera2 calls run on [cameraThread]; Compose state is only written on the
  * main thread.
  */
-class CameraManager(
-    private val context: Context,
-    private val scope: CoroutineScope
-) {
+class CameraManager(private val context: Context, private val scope: CoroutineScope) {
     val previewView: CameraPreviewView = CameraPreviewView(context)
 
     var isRecording by mutableStateOf(false)
@@ -184,22 +181,26 @@ class CameraManager(
 
         val generation = ++cameraGeneration
         try {
-            systemCameraManager.openCamera(id, object : CameraDevice.StateCallback() {
-                override fun onOpened(device: CameraDevice) {
-                    if (generation != cameraGeneration || !wantOpen) {
-                        device.close()
-                        return
+            systemCameraManager.openCamera(
+                id,
+                object : CameraDevice.StateCallback() {
+                    override fun onOpened(device: CameraDevice) {
+                        if (generation != cameraGeneration || !wantOpen) {
+                            device.close()
+                            return
+                        }
+                        camera = device
+                        val pending = pendingStartIndex
+                        pendingStartIndex = null
+                        if (pending != null) startRecorderOnThread(pending) else rebuildSession()
                     }
-                    camera = device
-                    val pending = pendingStartIndex
-                    pendingStartIndex = null
-                    if (pending != null) startRecorderOnThread(pending) else rebuildSession()
-                }
 
-                override fun onDisconnected(device: CameraDevice) = onCameraLost(device, generation, null)
+                    override fun onDisconnected(device: CameraDevice) = onCameraLost(device, generation, null)
 
-                override fun onError(device: CameraDevice, error: Int) = onCameraLost(device, generation, error)
-            }, cameraHandler)
+                    override fun onError(device: CameraDevice, error: Int) = onCameraLost(device, generation, error)
+                },
+                cameraHandler
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Couldn't open camera", e)
             stopForError("The camera couldn't be opened.")
@@ -248,7 +249,12 @@ class CameraManager(
         ) != null
         val candidates = cameraSizes
             .filter { it.width <= AppConfig.VIDEO_WIDTH && it.height <= AppConfig.VIDEO_HEIGHT }
-            .sortedWith(compareByDescending<Size> { it.width * 9 == it.height * 16 }.thenByDescending { it.width * it.height })
+            .sortedWith(
+                compareByDescending<Size> { it.width * 9 == it.height * 16 }.thenByDescending {
+                    it.width *
+                        it.height
+                }
+            )
         return candidates.firstOrNull { encoderSupports(it) } ?: candidates.firstOrNull() ?: videoSize
     }
 
@@ -261,22 +267,26 @@ class CameraManager(
         val generation = cameraGeneration
         try {
             @Suppress("DEPRECATION")
-            device.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(newSession: CameraCaptureSession) {
-                    if (generation != cameraGeneration || camera !== device) {
-                        newSession.close()
-                        return
+            device.createCaptureSession(
+                targets,
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(newSession: CameraCaptureSession) {
+                        if (generation != cameraGeneration || camera !== device) {
+                            newSession.close()
+                            return
+                        }
+                        session = newSession
+                        Log.d(TAG, "Capture session configured (${targets.size} outputs)")
+                        updateRepeatingRequest()
                     }
-                    session = newSession
-                    Log.d(TAG, "Capture session configured (${targets.size} outputs)")
-                    updateRepeatingRequest()
-                }
 
-                override fun onConfigureFailed(failed: CameraCaptureSession) {
-                    Log.e(TAG, "Capture session configuration failed")
-                    if (recorderSurface != null) stopForError("The camera couldn't start recording.")
-                }
-            }, cameraHandler)
+                    override fun onConfigureFailed(failed: CameraCaptureSession) {
+                        Log.e(TAG, "Capture session configuration failed")
+                        if (recorderSurface != null) stopForError("The camera couldn't start recording.")
+                    }
+                },
+                cameraHandler
+            )
         } catch (e: Exception) {
             Log.e(TAG, "Couldn't create capture session", e)
             if (recorderSurface != null) stopForError("The camera couldn't start recording.")
@@ -304,11 +314,17 @@ class CameraManager(
             if (chars?.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)
                     ?.contains(CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON) == true
             ) {
-                builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON)
+                builder.set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON
+                )
             }
             val hasFlash = chars?.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
             val torch = torchWanted && hasFlash && !useFront
-            builder.set(CaptureRequest.FLASH_MODE, if (torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF)
+            builder.set(
+                CaptureRequest.FLASH_MODE,
+                if (torch) CameraMetadata.FLASH_MODE_TORCH else CameraMetadata.FLASH_MODE_OFF
+            )
             activeSession.setRepeatingRequest(builder.build(), null, cameraHandler)
             mainHandler.post { isTorchOn = torch }
         } catch (e: CameraAccessException) {
@@ -526,7 +542,8 @@ class CameraPreviewView(context: Context) : TextureView(context) {
                 updateTransform()
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) = updateTransform()
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) =
+                updateTransform()
 
             // Keep the texture: the camera keeps drawing into it while the
             // view is off screen, and it's handed back on reattach.
@@ -565,7 +582,12 @@ class CameraPreviewView(context: Context) : TextureView(context) {
         // content's aspect ratio, enlarged until it covers the view.
         val scale = maxOf(viewWidth / contentWidth, viewHeight / contentHeight)
         val matrix = Matrix().apply {
-            setScale(contentWidth * scale / viewWidth, contentHeight * scale / viewHeight, viewWidth / 2, viewHeight / 2)
+            setScale(
+                contentWidth * scale / viewWidth,
+                contentHeight * scale / viewHeight,
+                viewWidth / 2,
+                viewHeight / 2
+            )
         }
         setTransform(matrix)
     }

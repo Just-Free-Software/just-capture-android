@@ -1,0 +1,85 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:CameraManager.kt:CameraPreviewView$viewWidth == 0f || viewHeight == 0f || contentWidth == 0 || contentHeight == 0</ID>
+    <ID>ComplexCondition:DriveStorageManager.kt:DriveStorageManager$local != null &amp;&amp; lastUpload != null &amp;&amp; System.currentTimeMillis() - lastUpload &lt; QUOTA_LAG_WINDOW_MS &amp;&amp; local.limit == server.limit &amp;&amp; local.usage &gt; server.usage</ID>
+    <ID>ComplexCondition:GoogleDriveService.kt:GoogleDriveService$isPublic &amp;&amp; (reason == "keyInvalid" || (status == 403 &amp;&amp; reason == "forbidden"))</ID>
+    <ID>ComplexCondition:RecordingScreen.kt:!camera.isRecording &amp;&amp; settings.includeLocationInEmail &amp;&amp; !location.permissionGranted &amp;&amp; location.permissionAsked</ID>
+    <ID>ComplexCondition:SettingsScreen.kt:q != null &amp;&amp; !q.isUnlimited &amp;&amp; limit != null &amp;&amp; limit &gt; 0</ID>
+    <ID>CyclomaticComplexMethod:ChunkRecorder.kt:ChunkRecorder$private fun handleVideoOutput</ID>
+    <ID>CyclomaticComplexMethod:GoogleDriveService.kt:GoogleDriveService$suspend fun uploadFile: String</ID>
+    <ID>CyclomaticComplexMethod:SharedFolderStore.kt:SharedFolderStore$suspend fun checkForNewClips</ID>
+    <ID>EmptyFunctionBlock:LocationManager.kt:LocationManager.FixListener${}</ID>
+    <ID>LongMethod:EmailQueueManager.kt:EmailQueueManager$private fun startSending</ID>
+    <ID>LongMethod:UploadQueueManager.kt:UploadQueueManager$fun enqueue</ID>
+    <ID>LoopWithTooManyJumpStatements:SharedFolderStore.kt:SharedFolderStore$for</ID>
+    <ID>LoopWithTooManyJumpStatements:UploadQueueManager.kt:UploadQueueManager$while</ID>
+    <ID>MagicNumber:CameraManager.kt:CameraManager$100</ID>
+    <ID>MagicNumber:CameraManager.kt:CameraManager$1000.0</ID>
+    <ID>MagicNumber:CameraManager.kt:CameraManager$1_000_000</ID>
+    <ID>MagicNumber:CameraManager.kt:CameraManager$30</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$1000</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$100_000L</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$1e6</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$3</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$7</ID>
+    <ID>MagicNumber:ChunkRecorder.kt:ChunkRecorder$8</ID>
+    <ID>MagicNumber:EmailQueueManager.kt:EmailQueueManager$1000</ID>
+    <ID>MagicNumber:Formatters.kt:Formatters$1000.0</ID>
+    <ID>MagicNumber:Formatters.kt:Formatters$1024.0</ID>
+    <ID>MagicNumber:GoogleAuthManager.kt:GoogleAuthManager$400</ID>
+    <ID>MagicNumber:GoogleAuthManager.kt:GoogleAuthManager$499</ID>
+    <ID>MagicNumber:GoogleAuthManager.kt:GoogleAuthManager$60_000</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$10</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$200</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$299</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$308</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$403</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$404</ID>
+    <ID>MagicNumber:GoogleDriveService.kt:GoogleDriveService$429</ID>
+    <ID>MagicNumber:StereoDownmixer.kt:StereoDownmixer.Companion$10</ID>
+    <ID>MagicNumber:StereoDownmixer.kt:StereoDownmixer.Companion$1e-3</ID>
+    <ID>MagicNumber:StereoDownmixer.kt:StereoDownmixer.Mode.MIX$0.5f</ID>
+    <ID>MagicNumber:Theme.kt:50</ID>
+    <ID>MagicNumber:UploadQueueManager.kt:UploadQueueManager$1000</ID>
+    <ID>MagicNumber:UploadQueueManager.kt:UploadQueueManager$60</ID>
+    <ID>ReturnCount:ChunkRecorder.kt:ChunkRecorder$private fun handleVideoOutput</ID>
+    <ID>ReturnCount:GoogleDriveService.kt:GoogleDriveService$fun folderIdFromLink: String?</ID>
+    <ID>SwallowedException:DriveSessionDownloader.kt:DriveSessionDownloader$e: Exception</ID>
+    <ID>SwallowedException:GoogleAuthManager.kt:GoogleAuthManager$e: Exception</ID>
+    <ID>SwallowedException:LocationManager.kt:LocationManager$e: Exception</ID>
+    <ID>SwallowedException:MyClipsScreen.kt:e: Exception</ID>
+    <ID>SwallowedException:SettingsScreen.kt:e: Exception</ID>
+    <ID>SwallowedException:UploadQueueManager.kt:UploadQueueManager$e2: Exception</ID>
+    <ID>SwallowedException:UploadQueueManager.kt:UploadQueueManager$e: DriveException.PublicSharingNotAllowed</ID>
+    <ID>SwallowedException:UploadQueueManager.kt:UploadQueueManager$e: DriveException.StorageQuotaExceeded</ID>
+    <ID>ThrowsCount:GoogleDriveService.kt:GoogleDriveService$private fun throwIfReadFailed</ID>
+    <ID>ThrowsCount:GoogleDriveService.kt:GoogleDriveService$suspend fun getStorageQuota: DriveStorageQuota</ID>
+    <ID>ThrowsCount:GoogleDriveService.kt:GoogleDriveService$suspend fun uploadFile: String</ID>
+    <ID>TooGenericExceptionCaught:CameraManager.kt:CameraManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ChunkRecorder.kt:ChunkRecorder$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DriveSessionDownloader.kt:DriveSessionDownloader$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:DriveStorageManager.kt:DriveStorageManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:EmailQueueManager.kt:EmailQueueManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:GoogleAuthManager.kt:GoogleAuthManager$e2: Exception</ID>
+    <ID>TooGenericExceptionCaught:GoogleAuthManager.kt:GoogleAuthManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LocationManager.kt:LocationManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:MyClipsScreen.kt:e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SessionStore.kt:SessionStore$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SettingsScreen.kt:e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SharedFolderStore.kt:SharedFolderStore$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:UploadQueueManager.kt:UploadQueueManager$e2: Exception</ID>
+    <ID>TooGenericExceptionCaught:UploadQueueManager.kt:UploadQueueManager$e: Exception</ID>
+    <ID>TooManyFunctions:CameraManager.kt:CameraManager</ID>
+    <ID>TooManyFunctions:ChunkRecorder.kt:ChunkRecorder</ID>
+    <ID>TooManyFunctions:DriveSessionDownloader.kt:DriveSessionDownloader</ID>
+    <ID>TooManyFunctions:GoogleAuthManager.kt:GoogleAuthManager</ID>
+    <ID>TooManyFunctions:GoogleDriveService.kt:GoogleDriveService</ID>
+    <ID>TooManyFunctions:LocationManager.kt:LocationManager</ID>
+    <ID>TooManyFunctions:MyClipsScreen.kt:fyi.justfreesoftware.justcapture.ui.screens.MyClipsScreen.kt</ID>
+    <ID>TooManyFunctions:RecordingScreen.kt:fyi.justfreesoftware.justcapture.ui.screens.RecordingScreen.kt</ID>
+    <ID>TooManyFunctions:SessionStore.kt:SessionStore</ID>
+    <ID>TooManyFunctions:UploadQueueManager.kt:UploadQueueManager</ID>
+  </CurrentIssues>
+</SmellBaseline>

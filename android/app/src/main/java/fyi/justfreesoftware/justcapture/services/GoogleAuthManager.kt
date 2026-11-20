@@ -15,6 +15,7 @@ import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.common.api.Scope
 import fyi.justfreesoftware.justcapture.config.AppConfig
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,7 +29,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.util.concurrent.TimeUnit
 
 class NotSignedInException : Exception("Not signed in")
 
@@ -45,10 +45,7 @@ class NotSignedInException : Exception("Not signed in")
  * expects each platform to use its own client type, and blocks custom-scheme
  * redirects for Android clients, so that flow couldn't be kept.
  */
-class GoogleAuthManager(
-    context: Context,
-    private val scope: CoroutineScope
-) {
+class GoogleAuthManager(context: Context, private val scope: CoroutineScope) {
     val isSignedIn = MutableStateFlow(false)
     val isAuthenticating = MutableStateFlow(false)
     val userEmail = MutableStateFlow<String?>(null)

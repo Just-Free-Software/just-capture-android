@@ -17,9 +17,14 @@ Package: `fyi.justfreesoftware.justcapture`
   recording, and recording continues while you use the other tabs.
 - **Uploads** — each clip uploads to a per-session Drive folder (resumable,
   two at a time, retried with backoff), and a `playlist.m3u8` lists the clips
-  in order. Folders stay private, and are set to "anyone with the link" only
-  when an email is queued for that recording. If Drive fills up, clips wait
-  on the phone and the app tries again once space is freed.
+  in order. A retry continues the same Drive upload where it stopped, and
+  being offline doesn't use up a clip's retries. Folders stay private, and
+  are set to "anyone with the link" only when an email is queued for that
+  recording. If Drive fills up, clips wait on the phone and the app tries
+  again once they fit.
+- **In the background** — after you leave the app, a WorkManager job brings
+  it back when there's a connection to finish uploads and emails. Finished
+  clips that a crash left unlisted are picked up at the next launch.
 - **Location** — with "Save location" on, location runs while recording and a
   point is saved at the start and at the end of each clip, on the phone and in
   `location.txt` in the Drive folder. Each line states its accuracy or that
@@ -28,10 +33,11 @@ Package: `fyi.justfreesoftware.justcapture`
 - **Notification emails** — sent through Gmail when recording starts, with the
   start time, address, map link and Drive link. Queued on disk and retried;
   if the folder link wasn't ready, a follow-up email sends it. A second
-  email goes out if Drive fills up mid-recording.
+  email goes out when Drive has under 1 GB left mid-recording, or is full.
 - **My Clips** — sessions with upload status, a clip grid with thumbnails,
   retry, the starting location, open in Drive, play the whole session back
-  from Drive, and the notification email outbox.
+  (from the clips still on the phone, downloading only missing ones) with
+  the saved location trail, and the notification email outbox.
 - **Watch** — paste a Drive folder link someone shared with you to download
   and play it back to back; saved folders show when new clips have arrived.
 - **Settings** — clip length, save location, recipients (with a test email), email subject
