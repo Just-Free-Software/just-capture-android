@@ -221,17 +221,12 @@ class GoogleAuthManager(
     }
 
     /**
-     * Token refreshes ask only for what the user granted. Asking for more
-     * (a scope they unticked, or one added after they signed in) makes Play
-     * services want the consent screen, which [validAccessToken] treats as
-     * signed out, possibly mid-recording. Sign-ins saved before scopes were
-     * stored predate the profile scope.
+     * Token refreshes ask only for what the user granted. Asking for a scope
+     * they unticked (profile is optional) makes Play services want the
+     * consent screen, which [validAccessToken] treats as signed out.
      */
-    private fun tokenScopes(): List<Scope> {
-        val granted = prefs.getStringSet(KEY_GRANTED_SCOPES, null)
-            ?: (AppConfig.OAUTH_SCOPES - AppConfig.PROFILE_SCOPE).toSet()
-        return granted.map { Scope(it) }
-    }
+    private fun tokenScopes(): List<Scope> =
+        (prefs.getStringSet(KEY_GRANTED_SCOPES, null) ?: AppConfig.OAUTH_SCOPES.toSet()).map { Scope(it) }
 
     private fun request(account: Account?, requested: List<Scope> = scopes): AuthorizationRequest {
         val builder = AuthorizationRequest.builder().setRequestedScopes(requested)
