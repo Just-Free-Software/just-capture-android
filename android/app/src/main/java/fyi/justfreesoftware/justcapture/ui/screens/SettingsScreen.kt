@@ -35,6 +35,9 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.SignalCellularAlt
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.ScreenLockPortrait
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +46,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -511,7 +515,12 @@ fun SettingsScreen(graph: AppGraph, scrollTarget: SettingsSection? = null, onScr
     }
 
     if (showHelp) {
-        ModalBottomSheet(onDismissRequest = { showHelp = false }, containerColor = AppColors.background) {
+        // Opens all the way, so the help can be read without dragging it up first.
+        ModalBottomSheet(
+            onDismissRequest = { showHelp = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = AppColors.background
+        ) {
             SettingsHelp()
         }
     }
@@ -549,6 +558,21 @@ private fun SettingsHelp() {
             HelpRow(Icons.Filled.LocationOn, "Your location",
                 "With Save location on, the app notes where you are when you start and after each clip. " +
                     "It's kept on your phone and in your Drive.")
+            HelpRow(Icons.Filled.SignalCellularAlt, "If your signal is bad",
+                "Each clip is saved on your phone first, so nothing is lost while you're offline. Uploads and emails " +
+                    "that don't go through are tried again, waiting a little longer each time, up to 20 minutes " +
+                    "between tries. When your connection comes back, they start again right away. Anything still " +
+                    "waiting keeps trying after you leave the app, as long as your phone is on and the app hasn't " +
+                    "been force-closed.")
+        }
+        HelpSection("What Can Stop a Recording") {
+            HelpRow(Icons.Filled.Call, "Phone calls",
+                "A call can take over the camera or microphone, which can cut out the sound or stop the recording. " +
+                    "After a call, check that you're still recording.", AppColors.warning)
+            HelpRow(Icons.Filled.ScreenLockPortrait, "Leaving the app",
+                "Recording only works while Just Capture is on screen. Switching apps, going home, or locking your " +
+                    "phone stops it. The screen stays on while you record, so it won't go to sleep on its own. " +
+                    "Clips you've already recorded still upload.", AppColors.warning)
         }
         HelpSection("Notifying People") {
             HelpRow(Icons.Filled.Email, "An email when you start",
@@ -579,9 +603,14 @@ private fun HelpSection(title: String, content: @Composable ColumnScope.() -> Un
 }
 
 @Composable
-private fun HelpRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, text: String) {
+private fun HelpRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    text: String,
+    tint: Color = AppColors.accent
+) {
     Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Icon(icon, contentDescription = null, tint = AppColors.accent, modifier = Modifier.padding(top = 2.dp).size(20.dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.padding(top = 2.dp).size(20.dp))
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text(text, color = AppColors.secondaryText, fontSize = 14.sp)
