@@ -93,7 +93,6 @@ class EmailQueueManager(
         recipients: List<String>,
         subject: String,
         bodyNote: String,
-        includeTime: Boolean,
         includeLocation: Boolean
     ): EmailJob {
         val fix = if (includeLocation) locationManager.freshFix() else null
@@ -104,7 +103,7 @@ class EmailQueueManager(
             recipients = recipients,
             subject = subject,
             bodyNote = bodyNote,
-            includeTime = includeTime,
+            includeTime = true,
             includeLocation = includeLocation,
             address = fix?.let { locationManager.address(it) },
             latitude = fix?.latitude,

@@ -492,7 +492,7 @@ private fun EmailJobRow(job: EmailJob, onRetry: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(job.subject, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(job.subject, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Text(
                 "$text · ${job.recipients.joinToString(", ")}",
                 color = AppColors.secondaryText,

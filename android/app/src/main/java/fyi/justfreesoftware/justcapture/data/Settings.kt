@@ -22,7 +22,6 @@ class Settings(context: Context) {
     var emailSubject by stringPref("emailSubject", "")
     var emailNote by stringPref("emailNote", "")
     var emailAlertsEnabled by boolPref("emailAlertsEnabled", true)
-    var includeTimeInEmail by boolPref("includeTimeInEmail", true)
     var includeLocationInEmail by boolPref("includeLocationInEmail", true)
     var hideSendClipTip by boolPref("hideSendClipTip", false)
 

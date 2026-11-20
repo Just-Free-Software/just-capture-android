@@ -77,7 +77,7 @@ class AppGraph(context: Context, val appScope: CoroutineScope) {
                 val session = sessionStore.currentSession ?: return@collect
                 if (session.isActive && storageEmailSentForSessionId != session.id) {
                     storageEmailSentForSessionId = session.id
-                    val email = EmailSettings.from(settings)
+                    val email = EmailSettings.from(settings, authManager.userName.value, authManager.userEmail.value)
                     if (email.canSend) {
                         enqueueEmail(session.id, "Storage Full: ${email.subject}", EmailSettings.STORAGE_FULL_NOTE, email)
                     }
@@ -144,7 +144,7 @@ fun AppGraph.startRecording(): Boolean {
         // send waits briefly for the folder so the email carries the link, but
         // goes out without it rather than stall on a bad network. Retried
         // automatically if the connection is poor.
-        val email = EmailSettings.from(settings)
+        val email = EmailSettings.from(settings, authManager.userName.value, authManager.userEmail.value)
         if (email.canSend) enqueueEmail(session.id, email.subject, email.note, email)
         // Create the Drive folder right away so its link is ready for the
         // email and the playlist can be built.
@@ -198,7 +198,6 @@ private suspend fun AppGraph.enqueueEmail(sessionId: String, subject: String, no
         recipients = settings.recipients,
         subject = subject,
         bodyNote = note,
-        includeTime = settings.includeTime,
         includeLocation = settings.includeLocation
     )
 }

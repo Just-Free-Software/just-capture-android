@@ -120,11 +120,10 @@ fun WatchScreen(graph: AppGraph) {
             ) {
                 item {
                     Column(modifier = Modifier.card(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Open a shared folder", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "Paste a Google Drive folder link someone sent you. It must be shared as \"Anyone with the link\".",
+                            "Paste the link from a Just Capture email to watch a recording someone else made.",
                             color = AppColors.secondaryText,
-                            fontSize = 12.sp
+                            fontSize = 15.sp
                         )
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
@@ -175,7 +174,7 @@ fun WatchScreen(graph: AppGraph) {
                 if (folders.isEmpty()) {
                     item {
                         Text(
-                            "Folders you open appear here and stay on this phone, so you can watch them again without downloading.",
+                            "Recordings you open are saved here.",
                             color = AppColors.secondaryText,
                             fontSize = 14.sp,
                             modifier = Modifier.card()

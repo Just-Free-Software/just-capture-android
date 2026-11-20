@@ -276,6 +276,7 @@ fun RecordingScreen(graph: AppGraph) {
             } else {
                 ReadinessPills(
                     recipientCount = recipientCount,
+                    alertsEnabled = settings.emailAlertsEnabled,
                     driveState = driveState,
                     driveAvailable = quota?.availableBytes,
                     deviceLow = isDeviceStorageLow,
@@ -397,6 +398,7 @@ private fun lowStorageMessage(graph: AppGraph): String {
 @Composable
 private fun ReadinessPills(
     recipientCount: Int,
+    alertsEnabled: Boolean,
     driveState: StorageState,
     driveAvailable: Long?,
     deviceLow: Boolean,
@@ -409,8 +411,11 @@ private fun ReadinessPills(
     ) {
         if (recipientCount > 0) {
             ReadinessPill(Icons.Filled.Email, "$recipientCount contact${if (recipientCount == 1) "" else "s"}", Color.White)
+        } else if (alertsEnabled) {
+            ReadinessPill(Icons.Filled.Email, "Add contacts to notify", AppColors.warning)
         } else {
-            ReadinessPill(Icons.Filled.Email, "No contacts", AppColors.warning)
+            // Switched off on purpose, so not a warning.
+            ReadinessPill(Icons.Filled.Email, "Notifications off", AppColors.secondaryText)
         }
         val (driveText, driveColor) = when (driveState) {
             StorageState.OK -> (driveAvailable?.let { Formatters.storageBytes(it) } ?: "Drive") to Color.White
