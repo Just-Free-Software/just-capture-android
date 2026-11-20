@@ -10,7 +10,6 @@ data class EmailSettings(
     val recipients: List<String>,
     val subject: String,
     val note: String,
-    val includeTime: Boolean,
     /**
      * The app-wide location switch, not just an email option: when off, the
      * app doesn't fetch location for recordings or emails. The storage key
@@ -23,7 +22,9 @@ data class EmailSettings(
         get() = alertsEnabled && recipients.isNotEmpty()
 
     companion object {
-        const val DEFAULT_SUBJECT = "I have started a recording"
+        /** Stands in for the sender in the subject; filled in when the email is sent. */
+        const val NAME_TOKEN = "[your_name]"
+        const val DEFAULT_SUBJECT = "$NAME_TOKEN started a recording"
 
         /**
          * Defaults from earlier builds. Settings used to save the default into
@@ -32,7 +33,8 @@ data class EmailSettings(
         private val LEGACY_SUBJECTS = setOf(
             "🚨 Emergency Recording Alert",
             "Alert! [your_name] is broadcasting",
-            "[your_name] started recording"
+            "[your_name] started recording",
+            "I have started a recording"
         )
 
         fun isDefaultSubject(subject: String): Boolean = subject.isEmpty() || subject in LEGACY_SUBJECTS
@@ -46,14 +48,21 @@ data class EmailSettings(
         private val SEPARATORS = Regex("[,;\\s]+")
         private val EMAIL = Regex("[^@\\s]+@[^@\\s]+\\.[^@\\s]+")
 
-        fun from(settings: Settings): EmailSettings {
+        /**
+         * [NAME_TOKEN] becomes the Google profile name, or the signed-in email
+         * if the user didn't grant profile access or signed in before it was
+         * asked for.
+         */
+        fun from(settings: Settings, accountName: String?, accountEmail: String?): EmailSettings {
             val rawSubject = settings.emailSubject.trim()
+            val subject = if (isDefaultSubject(rawSubject)) DEFAULT_SUBJECT else rawSubject
+            val sender = listOf(accountName, accountEmail).firstNotNullOfOrNull { it?.trim()?.takeIf(String::isNotEmpty) }
+                ?: "Someone"
             return EmailSettings(
                 alertsEnabled = settings.emailAlertsEnabled,
                 recipients = parseRecipients(settings.emailRecipients),
-                subject = if (isDefaultSubject(rawSubject)) DEFAULT_SUBJECT else rawSubject,
+                subject = subject.replace(NAME_TOKEN, sender),
                 note = settings.emailNote.trim(),
-                includeTime = settings.includeTimeInEmail,
                 includeLocation = settings.includeLocationInEmail
             )
         }

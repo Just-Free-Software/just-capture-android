@@ -52,6 +52,8 @@ class GoogleAuthManager(
     val isSignedIn = MutableStateFlow(false)
     val isAuthenticating = MutableStateFlow(false)
     val userEmail = MutableStateFlow<String?>(null)
+    /** Google profile name; null if the user didn't grant profile access. */
+    val userName = MutableStateFlow<String?>(null)
 
     /** Shown to the user when sign-in fails for a reason other than cancelling. */
     val signInError = MutableStateFlow<String?>(null)
@@ -87,6 +89,7 @@ class GoogleAuthManager(
         }
         val email = prefs.getString(KEY_ACCOUNT_EMAIL, null) ?: return
         userEmail.value = email
+        userName.value = prefs.getString(KEY_ACCOUNT_NAME, null)
         isSignedIn.value = true
         try {
             validAccessToken()
@@ -146,9 +149,17 @@ class GoogleAuthManager(
                 "Sign in again and allow both."
             return
         }
-        val email = fetchEmail(token) ?: throw IllegalStateException("No email in user info")
-        prefs.edit().putString(KEY_ACCOUNT_EMAIL, email).apply()
+        val info = fetchUserInfo(token)
+        val email = info["email"] ?: throw IllegalStateException("No email in user info")
+        val name = info["name"]?.trim()?.takeIf { it.isNotEmpty() }
+        val granted = result.grantedScopes.toSet().intersect(AppConfig.OAUTH_SCOPES.toSet())
+        prefs.edit()
+            .putString(KEY_ACCOUNT_EMAIL, email)
+            .putString(KEY_ACCOUNT_NAME, name)
+            .putStringSet(KEY_GRANTED_SCOPES, granted)
+            .apply()
         userEmail.value = email
+        userName.value = name
         isSignedIn.value = true
     }
 
@@ -179,7 +190,7 @@ class GoogleAuthManager(
      */
     suspend fun validAccessToken(): String = tokenMutex.withLock {
         val email = prefs.getString(KEY_ACCOUNT_EMAIL, null) ?: throw NotSignedInException()
-        val result = authClient.authorize(request(Account(email, GOOGLE_ACCOUNT_TYPE))).await()
+        val result = authClient.authorize(request(Account(email, GOOGLE_ACCOUNT_TYPE), tokenScopes())).await()
         if (result.hasResolution()) {
             // The user revoked access, or the account left the phone. Only
             // the sign-in screen can fix that, and background work can't
@@ -196,6 +207,7 @@ class GoogleAuthManager(
         prefs.edit().clear().apply()
         isSignedIn.value = false
         userEmail.value = null
+        userName.value = null
         // Without revoking, Play services keeps the grant and the next
         // sign-in would reuse this account without letting the user choose.
         if (email != null) {
@@ -208,13 +220,27 @@ class GoogleAuthManager(
         }
     }
 
-    private fun request(account: Account?): AuthorizationRequest {
-        val builder = AuthorizationRequest.builder().setRequestedScopes(scopes)
+    /**
+     * Token refreshes ask only for what the user granted. Asking for more
+     * (a scope they unticked, or one added after they signed in) makes Play
+     * services want the consent screen, which [validAccessToken] treats as
+     * signed out, possibly mid-recording. Sign-ins saved before scopes were
+     * stored predate the profile scope.
+     */
+    private fun tokenScopes(): List<Scope> {
+        val granted = prefs.getStringSet(KEY_GRANTED_SCOPES, null)
+            ?: (AppConfig.OAUTH_SCOPES - AppConfig.PROFILE_SCOPE).toSet()
+        return granted.map { Scope(it) }
+    }
+
+    private fun request(account: Account?, requested: List<Scope> = scopes): AuthorizationRequest {
+        val builder = AuthorizationRequest.builder().setRequestedScopes(requested)
         if (account != null) builder.setAccount(account)
         return builder.build()
     }
 
-    private suspend fun fetchEmail(accessToken: String): String? {
+    /** The user info fields this app reads: `email`, and `name` with profile access. */
+    private suspend fun fetchUserInfo(accessToken: String): Map<String, String> {
         val request = Request.Builder()
             .url(AppConfig.USER_INFO_ENDPOINT)
             .header("Authorization", "Bearer $accessToken")
@@ -226,13 +252,16 @@ class GoogleAuthManager(
                 resp.body?.string() ?: ""
             }
         }
-        return json.parseToJsonElement(text).jsonObject["email"]?.jsonPrimitive?.content
+        val obj = json.parseToJsonElement(text).jsonObject
+        return listOf("email", "name").mapNotNull { key -> obj[key]?.jsonPrimitive?.content?.let { key to it } }.toMap()
     }
 
     private companion object {
         const val TAG = "GoogleAuthManager"
         const val GOOGLE_ACCOUNT_TYPE = "com.google"
         const val KEY_ACCOUNT_EMAIL = "accountEmail"
+        const val KEY_ACCOUNT_NAME = "accountName"
+        const val KEY_GRANTED_SCOPES = "grantedScopes"
         const val LEGACY_KEY_REFRESH_TOKEN = "refreshToken"
     }
 }

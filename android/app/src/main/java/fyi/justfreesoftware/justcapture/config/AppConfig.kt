@@ -1,12 +1,16 @@
 package fyi.justfreesoftware.justcapture.config
 
 object AppConfig {
+    const val PROFILE_SCOPE = "https://www.googleapis.com/auth/userinfo.profile"
+
     // There's no client ID here: Google Play services matches the app to its
     // Android OAuth client by package name and signing certificate.
     val OAUTH_SCOPES = listOf(
         "https://www.googleapis.com/auth/drive.file",
         "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/userinfo.email"
+        "https://www.googleapis.com/auth/userinfo.email",
+        // For the name in the notification subject, as on iOS.
+        PROFILE_SCOPE
     )
 
     /** Sign-in fails if the user unticks either of these on the consent screen. */

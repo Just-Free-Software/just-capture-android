@@ -18,13 +18,23 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.PhoneAndroid
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
@@ -90,6 +100,7 @@ fun SettingsScreen(graph: AppGraph) {
     var isRefreshingStorage by remember { mutableStateOf(false) }
     var deviceFreeBytes by remember { mutableStateOf(DeviceStorage.availableBytes(context)) }
     var showSignOutConfirm by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
 
     val recipients = EmailSettings.parseRecipients(settings.emailRecipients)
     val invalidRecipients = recipients.filterNot { EmailSettings.isValidEmail(it) }
@@ -106,7 +117,7 @@ fun SettingsScreen(graph: AppGraph) {
 
     fun sendTestEmail() {
         focusManager.clearFocus()
-        val email = EmailSettings.from(settings)
+        val email = EmailSettings.from(settings, graph.authManager.userName.value, graph.authManager.userEmail.value)
         testEmailState = TestEmailState.Sending
         // App scope so leaving the tab doesn't cancel a send in flight.
         graph.appScope.launch {
@@ -117,7 +128,7 @@ fun SettingsScreen(graph: AppGraph) {
                     subject = "[Test] " + email.subject,
                     bodyNote = "This is a test from Just Capture. A real notification also includes a link to your " +
                         "recording in Google Drive." + if (email.note.isEmpty()) "" else "\n\n${email.note}",
-                    startedAtMs = if (email.includeTime) System.currentTimeMillis() else null,
+                    startedAtMs = System.currentTimeMillis(),
                     address = null,
                     latitude = null,
                     longitude = null,
@@ -140,7 +151,12 @@ fun SettingsScreen(graph: AppGraph) {
             .statusBarsPadding()
             .verticalScroll(rememberScrollState())
     ) {
-        ScreenTitle("Settings")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ScreenTitle("Settings", modifier = Modifier.weight(1f))
+            IconButton(onClick = { showHelp = true }, modifier = Modifier.padding(end = 4.dp, top = 8.dp)) {
+                Icon(Icons.AutoMirrored.Outlined.HelpOutline, contentDescription = "How it works", tint = AppColors.accent)
+            }
+        }
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
 
             // ---- Account ----
@@ -176,16 +192,7 @@ fun SettingsScreen(graph: AppGraph) {
             }
 
             // ---- Recording ----
-            Section(
-                header = "Recording",
-                footer = {
-                    FooterText(
-                        "Each clip starts uploading as soon as it ends. Shorter clips get footage off your phone sooner; " +
-                            "longer clips use less data. Your location is saved when you start recording and at the end of " +
-                            "each clip, on this phone and in Google Drive. Where you started is added to notification emails."
-                    )
-                }
-            ) {
+            Section(header = "Recording") {
                 Text("Clip length", color = Color.White, fontSize = 16.sp)
                 val options = listOf(10.0 to "10 sec", 30.0 to "30 sec", 60.0 to "60 sec")
                 SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -213,20 +220,17 @@ fun SettingsScreen(graph: AppGraph) {
                 header = "Email Notifications",
                 footer = {
                     when {
-                        !settings.emailAlertsEnabled -> FooterText("No one will be notified when you start recording.")
+                        !settings.emailAlertsEnabled -> {}
                         invalidRecipients.isNotEmpty() -> FooterText(
                             "Check ${invalidRecipients.joinToString(", ")} — " +
                                 "${if (invalidRecipients.size == 1) "it doesn't" else "they don't"} look like an email address.",
                             AppColors.record
                         )
                         recipients.isEmpty() -> FooterText(
-                            "Add at least one person to email when you start recording. Separate addresses with commas.",
+                            "Add people to email when you start recording, or turn off email notifications to dismiss this warning. Separate addresses with commas.",
                             AppColors.warning
                         )
-                        else -> FooterText(
-                            "When you start recording, ${if (recipients.size == 1) "1 person gets" else "${recipients.size} people get"} " +
-                                "an email with a link to the live recording in your Google Drive."
-                        )
+                        else -> {}
                     }
                 }
             ) {
@@ -264,20 +268,21 @@ fun SettingsScreen(graph: AppGraph) {
 
             // ---- Email content ----
             if (settings.emailAlertsEnabled) {
-                Section(
-                    header = "Email Content",
-                    footer = {
-                        FooterText(
-                            "A second email is sent if your Google Drive runs out of space mid-recording."
-                        )
-                    }
-                ) {
+                Section(header = "Email Content") {
                     OutlinedTextField(
                         value = settings.emailSubject,
-                        onValueChange = { settings.emailSubject = it },
+                        // Multi-line so a long subject wraps at large text sizes,
+                        // but a subject can't hold a newline, so Enter ends editing.
+                        onValueChange = {
+                            if (it.contains('\n')) {
+                                settings.emailSubject = it.replace("\n", "")
+                                focusManager.clearFocus()
+                            } else {
+                                settings.emailSubject = it
+                            }
+                        },
                         label = { Text("Subject") },
                         placeholder = { Text(EmailSettings.DEFAULT_SUBJECT) },
-                        singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
@@ -288,7 +293,6 @@ fun SettingsScreen(graph: AppGraph) {
                         maxLines = 5,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    SwitchRow("Include start time", settings.includeTimeInEmail) { settings.includeTimeInEmail = it }
                 }
             }
 
@@ -296,16 +300,9 @@ fun SettingsScreen(graph: AppGraph) {
             Section(
                 header = "Storage",
                 footer = {
-                    val parts = mutableListOf<String>()
                     graph.driveStorageManager.estimatedRecordingSeconds()?.let {
-                        parts += "Enough space for about ${Formatters.recordingTime(it)} of recording."
+                        FooterText("Enough space for about ${Formatters.recordingTime(it)} of recording.")
                     }
-                    parts += "Clips stay on this phone after uploading."
-                    if (isDeviceStorageLow) {
-                        parts += "Your phone is running low on space; delete old sessions in My Clips to make room for new recordings."
-                    }
-                    parts += "Clips in Google Drive are never deleted by the app."
-                    FooterText(parts.joinToString(" "))
                 }
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -364,7 +361,7 @@ fun SettingsScreen(graph: AppGraph) {
             // ---- About ----
             Section(
                 header = "About",
-                footer = { FooterText("Just Capture records in short clips and tries to upload each one to your Google Drive as it goes.") }
+                footer = { FooterText("Just Capture records in short clips and tries to upload each one to your Google Drive as it goes.\n\nJust Capture doesn't contact emergency services. If you're in danger, call your local emergency number.") }
             ) {
                 Row {
                     Text("Version", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
@@ -375,6 +372,12 @@ fun SettingsScreen(graph: AppGraph) {
                 Divider()
                 LinkRow("Privacy Policy", AppConfig.PRIVACY_POLICY_URL)
             }
+        }
+    }
+
+    if (showHelp) {
+        ModalBottomSheet(onDismissRequest = { showHelp = false }, containerColor = AppColors.background) {
+            SettingsHelp()
         }
     }
 
@@ -391,6 +394,63 @@ fun SettingsScreen(graph: AppGraph) {
             },
             dismissButton = { TextButton(onClick = { showSignOutConfirm = false }) { Text("Cancel") } }
         )
+    }
+}
+
+/** Longer explanations of the settings, kept out of the screen's footers. */
+@Composable
+private fun SettingsHelp() {
+    Column(
+        modifier = Modifier
+            .verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text("How It Works", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        HelpSection("Recording") {
+            HelpRow(Icons.Filled.Videocam, "Saved as you go",
+                "Your video is saved in short clips. Each one uploads to your Google Drive as soon as it's done, " +
+                    "so what's uploaded stays safe even if you lose your phone.")
+            HelpRow(Icons.Filled.LocationOn, "Your location",
+                "With Save location on, the app notes where you are when you start and after each clip. " +
+                    "It's kept on your phone and in your Drive.")
+        }
+        HelpSection("Notifying People") {
+            HelpRow(Icons.Filled.Email, "An email when you start",
+                "The people you add get an email from your Gmail with a link to your recording.")
+            HelpRow(Icons.AutoMirrored.Filled.Chat, "What it says",
+                "When you started, your message, and your location if it's on. Type [your_name] and it shows your name.")
+            HelpRow(Icons.Filled.CloudOff, "If your Drive fills up",
+                "They get an email letting them know. Just Capture keeps trying, so if space is freed or someone adds " +
+                    "storage to your Google account, like whoever manages your family plan, the rest of your clips " +
+                    "upload on their own. This works as long as your phone is on and the app hasn't been force-closed.")
+        }
+        HelpSection("Storage") {
+            HelpRow(Icons.Filled.PhoneAndroid, "Clips stay on your phone",
+                "To free up space, delete old recordings in My Clips.")
+            HelpRow(Icons.Filled.CloudDone, "Your Drive is never touched",
+                "Just Capture never deletes anything from your Google Drive.")
+        }
+    }
+}
+
+@Composable
+private fun HelpSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+    Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(title, color = AppColors.accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(start = 16.dp))
+        Column(modifier = Modifier.card(), verticalArrangement = Arrangement.spacedBy(16.dp), content = content)
+    }
+}
+
+@Composable
+private fun HelpRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, text: String) {
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(icon, contentDescription = null, tint = AppColors.accent, modifier = Modifier.padding(top = 2.dp).size(20.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            Text(text, color = AppColors.secondaryText, fontSize = 14.sp)
+        }
     }
 }
 
