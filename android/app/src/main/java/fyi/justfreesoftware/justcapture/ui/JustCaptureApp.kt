@@ -295,11 +295,14 @@ private fun SignInScreen(graph: AppGraph) {
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(top = 14.dp, start = 16.dp, end = 16.dp)
             )
-            TextButton(
-                onClick = { runCatching { uriHandler.openUri(AppConfig.PRIVACY_POLICY_URL) } },
-                modifier = Modifier.padding(bottom = 12.dp)
-            ) {
-                Text("Privacy Policy", color = AppColors.secondaryText, fontSize = 12.sp)
+            Row(modifier = Modifier.padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { runCatching { uriHandler.openUri(AppConfig.PRIVACY_POLICY_URL) } }) {
+                    Text("Privacy Policy", color = AppColors.secondaryText, fontSize = 12.sp)
+                }
+                Text("·", color = AppColors.tertiaryText, fontSize = 12.sp)
+                TextButton(onClick = { runCatching { uriHandler.openUri(AppConfig.TERMS_URL) } }) {
+                    Text("Terms of Service", color = AppColors.secondaryText, fontSize = 12.sp)
+                }
             }
         }
     }

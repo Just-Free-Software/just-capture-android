@@ -61,6 +61,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
@@ -300,7 +315,7 @@ fun SettingsScreen(graph: AppGraph, scrollTarget: SettingsSection? = null, onScr
                         )
 
                         recipients.isEmpty() -> FooterText(
-                            "Add people to email when you start recording, or turn off email notifications to dismiss this warning. Separate addresses with commas.",
+                            "Add people to email when you start recording, or turn off email notifications to dismiss this warning.",
                             AppColors.warning
                         )
                         else -> {}
@@ -309,42 +324,23 @@ fun SettingsScreen(graph: AppGraph, scrollTarget: SettingsSection? = null, onScr
             ) {
                 SwitchRow("Email notifications", settings.emailAlertsEnabled) { settings.emailAlertsEnabled = it }
                 if (settings.emailAlertsEnabled) {
-                    if (committedRecipients.isNotEmpty()) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            committedRecipients.forEach { address ->
-                                RecipientChip(address, EmailSettings.isValidEmail(address)) {
-                                    committedRecipients = committedRecipients - address
-                                    saveRecipients()
-                                }
-                            }
-                        }
-                    }
-                    OutlinedTextField(
-                        value = recipientDraft,
-                        onValueChange = { draft ->
+                    RecipientField(
+                        recipients = committedRecipients,
+                        draft = recipientDraft,
+                        onDraftChange = { draft ->
                             recipientDraft = draft
                             // A comma, space or pasted list finishes an address.
                             if (draft.any { it in RECIPIENT_SEPARATORS }) commitDraft() else saveRecipients()
                         },
-                        label = { Text("Add email address") },
-                        placeholder = { Text("name@example.com") },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Email,
-                            autoCorrectEnabled = false,
-                            imeAction = ImeAction.Done
-                        ),
-                        // Stays in the field to add another.
-                        keyboardActions = KeyboardActions(onDone = { commitDraft() }),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onFocusChanged { focus ->
-                                if (recipientsFocused && !focus.isFocused) commitDraft()
-                                recipientsFocused = focus.isFocused
-                            }
+                        onCommit = ::commitDraft,
+                        onRemove = { address ->
+                            committedRecipients = committedRecipients - address
+                            saveRecipients()
+                        },
+                        onFocusChanged = { focused ->
+                            if (recipientsFocused && !focused) commitDraft()
+                            recipientsFocused = focused
+                        }
                     )
                     val canTest =
                         recipients.isNotEmpty() && !hasInvalidRecipient &&
@@ -508,6 +504,8 @@ fun SettingsScreen(graph: AppGraph, scrollTarget: SettingsSection? = null, onScr
                 LinkRow("Website", AppConfig.HOMEPAGE_URL)
                 Divider()
                 LinkRow("Privacy Policy", AppConfig.PRIVACY_POLICY_URL)
+                Divider()
+                LinkRow("Terms of Service", AppConfig.TERMS_URL)
             }
         }
     }
@@ -607,6 +605,95 @@ private const val RECIPIENT_SEPARATORS = ",; \n\t"
  * One accepted notification address: a round initial, the address, and a
  * button to remove it.
  */
+/**
+ * One box holding the added addresses as chips with the typing spot after
+ * them, like the To line of an email. Backspace in an empty spot removes the
+ * last chip.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RecipientField(
+    recipients: List<String>,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onCommit: () -> Unit,
+    onRemove: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(4.dp)
+    FlowRow(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .border(
+                if (focused) 2.dp else 1.dp,
+                if (focused) AppColors.accent else MaterialTheme.colorScheme.outline,
+                shape
+            )
+            .clickable(interactionSource = null, indication = null) { focusRequester.requestFocus() }
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            "To",
+            color = AppColors.secondaryText,
+            fontSize = 16.sp,
+            modifier = Modifier.align(Alignment.CenterVertically)
+        )
+        recipients.forEach { address ->
+            RecipientChip(address, EmailSettings.isValidEmail(address)) { onRemove(address) }
+        }
+        BasicTextField(
+            value = draft,
+            onValueChange = onDraftChange,
+            singleLine = true,
+            textStyle = TextStyle(color = Color.White, fontSize = 16.sp),
+            cursorBrush = SolidColor(AppColors.accent),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Email,
+                autoCorrectEnabled = false,
+                imeAction = ImeAction.Done
+            ),
+            // Stays in the field to add another.
+            keyboardActions = KeyboardActions(onDone = { onCommit() }),
+            decorationBox = { inner ->
+                Box(contentAlignment = Alignment.CenterStart) {
+                    if (draft.isEmpty()) {
+                        Text(
+                            if (recipients.isEmpty()) "Add email address" else "Add another",
+                            color = AppColors.tertiaryText,
+                            fontSize = 16.sp,
+                            maxLines = 1
+                        )
+                    }
+                    inner()
+                }
+            },
+            modifier = Modifier
+                // Fills the rest of the line, or wraps to its own when too narrow.
+                .weight(1f)
+                .align(Alignment.CenterVertically)
+                .widthIn(min = 120.dp)
+                .padding(vertical = 6.dp)
+                .focusRequester(focusRequester)
+                .onFocusChanged {
+                    focused = it.isFocused
+                    onFocusChanged(it.isFocused)
+                }
+                .onPreviewKeyEvent { event ->
+                    val removeLast = event.type == KeyEventType.KeyDown && event.key == Key.Backspace &&
+                        draft.isEmpty() && recipients.isNotEmpty()
+                    if (removeLast) onRemove(recipients.last())
+                    removeLast
+                }
+                .semantics { contentDescription = "Add email address" }
+        )
+    }
+}
+
 @Composable
 private fun RecipientChip(address: String, isValid: Boolean, onRemove: () -> Unit) {
     val color = if (isValid) AppColors.accent else AppColors.record

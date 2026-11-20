@@ -40,4 +40,5 @@ object AppConfig {
     /** Linked from Settings and notification emails. */
     const val HOMEPAGE_URL = "https://justfreesoftware.fyi/just-capture/info"
     const val PRIVACY_POLICY_URL = "https://justfreesoftware.fyi/just-capture/privacy-policy"
+    const val TERMS_URL = "https://justfreesoftware.fyi/just-capture/terms"
 }
